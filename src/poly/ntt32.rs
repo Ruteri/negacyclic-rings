@@ -378,6 +378,41 @@ pub fn inv_ntt<const N: usize>(ring: &Ring32<N>, p: &mut [u32; N]) {
     inv_ntt_scalar(ring, p);
 }
 
+fn pointwise_dot_scalar<const N: usize>(
+    ring: &Ring32<N>,
+    a: &[[u32; N]],
+    b: &[[u32; N]],
+) -> [u32; N] {
+    let mut out = [0u32; N];
+    for i in 0..N {
+        let mut mont_acc = 0;
+        for (av, bv) in a.iter().zip(b) {
+            mont_acc = add_mod(mont_acc, mont_mul(av[i], bv[i], ring), ring.q);
+        }
+        out[i] = mont_mul(mont_acc, ring.r2, ring);
+    }
+    out
+}
+
+/// `out[i] = Σ_k a[k][i]·b[k][i] (mod q)` for canonical inputs.
+pub fn pointwise_dot<const N: usize>(ring: &Ring32<N>, a: &[[u32; N]], b: &[[u32; N]]) -> [u32; N] {
+    assert_eq!(a.len(), b.len());
+    #[cfg(target_arch = "x86_64")]
+    if N >= 8 && avx2_available() {
+        let mut out = [0u32; N];
+        unsafe { avx2::pointwise_dot_avx2(ring, &mut out, a, b) };
+        return out;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let mut out = [0u32; N];
+        unsafe { neon::pointwise_dot_neon(ring, &mut out, a, b) };
+        return out;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    pointwise_dot_scalar(ring, a, b)
+}
+
 fn pointwise_mac_scalar<const N: usize, const LIMBS: usize>(
     ring: &Ring32<N>,
     acc: &mut [u32; N],
@@ -727,6 +762,31 @@ mod avx2 {
     }
 
     #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn pointwise_dot_avx2<const N: usize>(
+        ring: &Ring32<N>,
+        out: &mut [u32; N],
+        a: &[[u32; N]],
+        b: &[[u32; N]],
+    ) {
+        let q_v = _mm256_set1_epi32(ring.q as i32);
+        let q64_v = _mm256_set1_epi64x(ring.q as i64);
+        let qinv_v = _mm256_set1_epi64x(ring.q_inv_neg as i64);
+        let r2_v = _mm256_set1_epi32(ring.r2 as i32);
+        for chunk in 0..(N / LANES) {
+            let off = chunk * LANES;
+            let mut mont_acc = _mm256_setzero_si256();
+            for k in 0..a.len() {
+                let av = _mm256_loadu_si256(a[k].as_ptr().add(off) as *const __m256i);
+                let bv = _mm256_loadu_si256(b[k].as_ptr().add(off) as *const __m256i);
+                let prod = mont_mul_v(av, bv, q64_v, qinv_v);
+                mont_acc = add_mod_v(mont_acc, prod, q_v);
+            }
+            let canon = mont_mul_v(mont_acc, r2_v, q64_v, qinv_v);
+            _mm256_storeu_si256(out.as_mut_ptr().add(off) as *mut __m256i, canon);
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
     pub(super) unsafe fn pointwise_mac_avx2<const N: usize, const LIMBS: usize>(
         ring: &Ring32<N>,
         acc: &mut [u32; N],
@@ -779,6 +839,18 @@ mod neon {
     #[inline(always)]
     unsafe fn sub_mod_v(a: int32x4_t, b: int32x4_t, q_v: int32x4_t) -> int32x4_t {
         canonicalize(vsubq_s32(a, b), q_v)
+    }
+
+    #[inline(always)]
+    unsafe fn sub_if_ge(v: int32x4_t, bound: int32x4_t) -> int32x4_t {
+        let subtract = vandq_u32(vcgeq_s32(v, bound), vreinterpretq_u32_s32(bound));
+        vsubq_s32(v, vreinterpretq_s32_u32(subtract))
+    }
+
+    #[inline(always)]
+    unsafe fn add_if_negative(v: int32x4_t, bound: int32x4_t) -> int32x4_t {
+        let add = vandq_u32(vcltq_s32(v, vdupq_n_s32(0)), vreinterpretq_u32_s32(bound));
+        vaddq_s32(v, vreinterpretq_s32_u32(add))
     }
 
     #[inline(always)]
@@ -932,8 +1004,9 @@ mod neon {
         }
     }
 
-    pub(super) unsafe fn ntt_neon<const N: usize>(ring: &Ring32<N>, p: &mut [u32; N]) {
+    unsafe fn ntt_neon_inner<const N: usize, const LAZY: bool>(ring: &Ring32<N>, p: &mut [u32; N]) {
         let q_v = vdupq_n_s32(ring.q as i32);
+        let two_q_v = vdupq_n_s32((ring.q * 2) as i32);
         let mut t = N;
         for l in 0..(N.trailing_zeros() as usize - 2) {
             let m = 1usize << l;
@@ -947,14 +1020,16 @@ mod neon {
                     let u = vreinterpretq_s32_u32(vld1q_u32(p.as_ptr().add(j)));
                     let v = vreinterpretq_s32_u32(vld1q_u32(p.as_ptr().add(j + ht)));
                     let v = becker_mul_v(v, w, scaled, q_v);
-                    vst1q_u32(
-                        p.as_mut_ptr().add(j),
-                        vreinterpretq_u32_s32(add_mod_v(u, v, q_v)),
-                    );
-                    vst1q_u32(
-                        p.as_mut_ptr().add(j + ht),
-                        vreinterpretq_u32_s32(sub_mod_v(u, v, q_v)),
-                    );
+                    let (sum, diff) = if LAZY {
+                        (
+                            sub_if_ge(vaddq_s32(u, v), two_q_v),
+                            add_if_negative(vsubq_s32(u, v), two_q_v),
+                        )
+                    } else {
+                        (add_mod_v(u, v, q_v), sub_mod_v(u, v, q_v))
+                    };
+                    vst1q_u32(p.as_mut_ptr().add(j), vreinterpretq_u32_s32(sum));
+                    vst1q_u32(p.as_mut_ptr().add(j + ht), vreinterpretq_u32_s32(diff));
                     j += LANES;
                 }
                 j1 += t;
@@ -962,11 +1037,30 @@ mod neon {
             t = ht;
         }
         debug_assert_eq!(t, LANES);
+        if LAZY {
+            for off in (0..N).step_by(LANES) {
+                let ptr = p.as_mut_ptr().add(off);
+                let v = vreinterpretq_s32_u32(vld1q_u32(ptr));
+                vst1q_u32(ptr, vreinterpretq_u32_s32(sub_if_ge(v, q_v)));
+            }
+        }
         ntt_tail(ring, p, q_v);
     }
 
-    pub(super) unsafe fn inv_ntt_neon<const N: usize>(ring: &Ring32<N>, p: &mut [u32; N]) {
+    pub(super) unsafe fn ntt_neon<const N: usize>(ring: &Ring32<N>, p: &mut [u32; N]) {
+        if (ring.q as u64) * 4 < (1u64 << 31) {
+            ntt_neon_inner::<N, true>(ring, p);
+        } else {
+            ntt_neon_inner::<N, false>(ring, p);
+        }
+    }
+
+    unsafe fn inv_ntt_neon_inner<const N: usize, const LAZY: bool>(
+        ring: &Ring32<N>,
+        p: &mut [u32; N],
+    ) {
         let q_v = vdupq_n_s32(ring.q as i32);
+        let two_q_v = vdupq_n_s32((ring.q * 2) as i32);
         inv_ntt_tail(ring, p, q_v);
         let (mut t, mut m) = (LANES, N / LANES);
         while m > 1 {
@@ -983,11 +1077,16 @@ mod neon {
                 while j < j1 + t {
                     let u = vreinterpretq_s32_u32(vld1q_u32(p.as_ptr().add(j)));
                     let v = vreinterpretq_s32_u32(vld1q_u32(p.as_ptr().add(j + t)));
-                    vst1q_u32(
-                        p.as_mut_ptr().add(j),
-                        vreinterpretq_u32_s32(add_mod_v(u, v, q_v)),
-                    );
-                    let d = becker_mul_v(sub_mod_v(u, v, q_v), w, scaled, q_v);
+                    let (sum, diff) = if LAZY {
+                        (
+                            sub_if_ge(vaddq_s32(u, v), two_q_v),
+                            add_if_negative(vsubq_s32(u, v), two_q_v),
+                        )
+                    } else {
+                        (add_mod_v(u, v, q_v), sub_mod_v(u, v, q_v))
+                    };
+                    vst1q_u32(p.as_mut_ptr().add(j), vreinterpretq_u32_s32(sum));
+                    let d = becker_mul_v(diff, w, scaled, q_v);
                     vst1q_u32(p.as_mut_ptr().add(j + t), vreinterpretq_u32_s32(d));
                     j += LANES;
                 }
@@ -1004,6 +1103,14 @@ mod neon {
                 ptr,
                 vreinterpretq_u32_s32(becker_mul_v(v, n_inv, scaled, q_v)),
             );
+        }
+    }
+
+    pub(super) unsafe fn inv_ntt_neon<const N: usize>(ring: &Ring32<N>, p: &mut [u32; N]) {
+        if (ring.q as u64) * 4 < (1u64 << 31) {
+            inv_ntt_neon_inner::<N, true>(ring, p);
+        } else {
+            inv_ntt_neon_inner::<N, false>(ring, p);
         }
     }
 
@@ -1026,6 +1133,37 @@ mod neon {
         }
         for i in vector_end..N {
             out[i] = mul_mod(lhs[i], rhs[i], ring);
+        }
+    }
+
+    pub(super) unsafe fn pointwise_dot_neon<const N: usize>(
+        ring: &Ring32<N>,
+        out: &mut [u32; N],
+        a: &[[u32; N]],
+        b: &[[u32; N]],
+    ) {
+        let q_v = vdupq_n_s32(ring.q as i32);
+        let r2 = vdupq_n_u32(ring.r2);
+        let vector_end = N / LANES * LANES;
+        for off in (0..vector_end).step_by(LANES) {
+            let mut mont_acc = vdupq_n_s32(0);
+            for k in 0..a.len() {
+                let av = vld1q_u32(a[k].as_ptr().add(off));
+                let bv = vld1q_u32(b[k].as_ptr().add(off));
+                let prod = mont_mul_v(av, bv, ring.q, ring.q_inv_neg);
+                mont_acc = add_mod_v(mont_acc, vreinterpretq_s32_u32(prod), q_v);
+            }
+            vst1q_u32(
+                out.as_mut_ptr().add(off),
+                mont_mul_v(vreinterpretq_u32_s32(mont_acc), r2, ring.q, ring.q_inv_neg),
+            );
+        }
+        for i in vector_end..N {
+            let mut sum = 0;
+            for k in 0..a.len() {
+                sum = super::add_mod(sum, mul_mod(a[k][i], b[k][i], ring), ring.q);
+            }
+            out[i] = sum;
         }
     }
 

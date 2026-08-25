@@ -34,7 +34,7 @@ rns.forward(&mut residues);
 rns.inverse(&mut residues);
 ```
 
-Inputs and outputs are canonical residues in `[0, q)`. Polynomial multiplication is forward NTT on both operands, `pointwise_mul`, then inverse NTT. Use `pointwise_mac` for a sum of products; it avoids repeated conversion out of Montgomery form.
+Inputs and outputs are canonical residues in `[0, q)`. Polynomial multiplication is forward NTT on both operands, `pointwise_mul`, then inverse NTT. Use `pointwise_dot` for a single-ring sum of products and `pointwise_mac` for RNS accumulation; both convert out of Montgomery form once per result.
 
 RNS channels are independent NTT rings. `reduce_coeff` maps an integer to its channels. `lift_coeff` reconstructs into `[0, product)` and `lift_centered` into the centered interval. Channel moduli must be pairwise coprime, and their product must fit `u128`.
 

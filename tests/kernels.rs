@@ -41,6 +41,21 @@ fn ntt32_roundtrip_and_product() {
 }
 
 #[test]
+fn ntt32_pointwise_dot_matches_separate_products() {
+    let ring = generate_ring32::<N>(Q, find_psi32::<N>(Q));
+    let mut rng = ChaCha20Rng::from_seed([5; 32]);
+    let a: [[u32; N]; 3] = core::array::from_fn(|_| core::array::from_fn(|_| rng.gen_range(0..Q)));
+    let b: [[u32; N]; 3] = core::array::from_fn(|_| core::array::from_fn(|_| rng.gen_range(0..Q)));
+    let dot = ntt32::pointwise_dot(&ring, &a, &b);
+    let expected = core::array::from_fn(|i| {
+        a.iter().zip(&b).fold(0, |sum, (x, y)| {
+            ntt32::add_mod(sum, ntt32::mul_mod(x[i], y[i], &ring), Q)
+        })
+    });
+    assert_eq!(dot, expected);
+}
+
+#[test]
 fn ntt64_roundtrip_and_product() {
     let q = Q as u64;
     let ring = generate_ring64::<N>(q, find_psi64::<N>(q));
