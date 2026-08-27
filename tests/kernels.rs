@@ -116,3 +116,61 @@ fn rns_24_bit_ntt_pointwise_and_mac() {
     rns.inverse(&mut mac);
     assert_eq!(mac, product);
 }
+
+#[test]
+fn bulk_signed_reduction_matches_scalar() {
+    let moduli = [16_760_833u32, 16_736_257, 12_289];
+    let rns = Rns::new(moduli.map(|q| generate_ring32::<N>(q, find_psi32::<N>(q))));
+    let cases = [
+        i64::MIN,
+        i64::MIN + 1,
+        -280_513_608_622_080,
+        -1,
+        0,
+        1,
+        280_513_608_622_080,
+        i64::MAX,
+    ];
+    let input = core::array::from_fn(|i| cases[i % cases.len()]);
+    let mut residues = [[0u32; N]; 3];
+    rns.reduce_i64_into(&input, &mut residues);
+    for i in 0..N {
+        let expected = rns.reduce_coeff(input[i] as i128);
+        assert_eq!(core::array::from_fn(|limb| residues[limb][i]), expected);
+    }
+}
+
+#[test]
+fn bulk_centered_i32_reduction_matches_scalar() {
+    let moduli = [16_760_833u32, 16_736_257];
+    let rns = Rns::new(moduli.map(|q| generate_ring32::<N>(q, find_psi32::<N>(q))));
+    let input_modulus = 139_301i32;
+    let cases = [-input_modulus / 2, -1, 0, 1, input_modulus / 2];
+    let input = core::array::from_fn(|i| cases[i % cases.len()]);
+    let mut residues = [[0u32; N]; 2];
+    rns.reduce_centered_i32_into(&input, &mut residues);
+    for i in 0..N {
+        assert_eq!(
+            [residues[0][i], residues[1][i]],
+            rns.reduce_coeff(input[i] as i128)
+        );
+    }
+}
+
+#[test]
+fn bulk_two_limb_centered_lift_matches_garner() {
+    for moduli in [[16_760_833u32, 16_736_257], [16_760_833, 40_961]] {
+        let rns = Rns::new(moduli.map(|q| generate_ring32::<N>(q, find_psi32::<N>(q))));
+        let mut rng = ChaCha20Rng::from_seed([6; 32]);
+        let residues =
+            core::array::from_fn(|limb| core::array::from_fn(|_| rng.gen_range(0..rns.ch[limb].q)));
+        let mut lifted = [0i64; N];
+        rns.lift_centered_i64_into(&residues, &mut lifted);
+        for i in 0..N {
+            assert_eq!(
+                lifted[i] as i128,
+                rns.lift_centered([residues[0][i], residues[1][i]])
+            );
+        }
+    }
+}

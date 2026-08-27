@@ -12,9 +12,3 @@ sha2 = "0.10"
 
 [profile.test]
 opt-level = 1
-
-[[example]]
-name = "bench_ntt"
-
-[[example]]
-name = "profile_rns"

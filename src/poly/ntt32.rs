@@ -150,6 +150,24 @@ impl<const N: usize, const LIMBS: usize> Rns<N, LIMBS> {
         core::array::from_fn(|i| x.rem_euclid(self.ch[i].q as i128) as u32)
     }
 
+    /// Reduce signed coefficients into canonical residues for every channel.
+    pub fn reduce_i64_into(&self, input: &[i64; N], output: &mut Residues<N, LIMBS>) {
+        for (ring, channel) in self.ch.iter().zip(output.iter_mut()) {
+            reduce_i64_channel(ring, input, channel);
+        }
+    }
+
+    /// Reduce centered coefficients into every RNS channel. Each coefficient's
+    /// magnitude must be smaller than every channel modulus.
+    pub fn reduce_centered_i32_into(&self, input: &[i32; N], output: &mut Residues<N, LIMBS>) {
+        debug_assert!(input
+            .iter()
+            .all(|value| self.ch.iter().all(|ring| value.unsigned_abs() < ring.q)));
+        for (ring, channel) in self.ch.iter().zip(output.iter_mut()) {
+            reduce_centered_i32_into(ring, input, channel);
+        }
+    }
+
     /// Garner lift into `[0, product)`.
     #[inline]
     pub fn lift_coeff(&self, r: [u32; LIMBS]) -> u128 {
@@ -235,6 +253,106 @@ impl<const N: usize, const LIMBS: usize> Rns<N, LIMBS> {
             })
         })
     }
+}
+
+impl<const N: usize> Rns<N, 2> {
+    /// Reconstruct canonical two-limb residues into centered `i64` values.
+    pub fn lift_centered_i64_into(&self, input: &Residues<N, 2>, output: &mut [i64; N]) {
+        assert!(self.product <= i64::MAX as u128, "RNS product exceeds i64");
+        debug_assert!(input[0].iter().all(|&x| x < self.ch[0].q));
+        debug_assert!(input[1].iter().all(|&x| x < self.ch[1].q));
+        lift_centered_i64_rns2(self, input, output);
+    }
+}
+
+fn reduce_i64_channel_scalar<const N: usize>(
+    ring: &Ring32<N>,
+    input: &[i64; N],
+    output: &mut [u32; N],
+) {
+    for (out, &value) in output.iter_mut().zip(input) {
+        *out = value.rem_euclid(ring.q as i64) as u32;
+    }
+}
+
+fn reduce_i64_channel<const N: usize>(ring: &Ring32<N>, input: &[i64; N], output: &mut [u32; N]) {
+    #[cfg(target_arch = "x86_64")]
+    if N >= 4 && N.is_multiple_of(4) && avx2_available() {
+        unsafe { avx2::reduce_i64_avx2(ring, input, output) };
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if N >= 2 && N.is_multiple_of(2) {
+        unsafe { neon::reduce_i64_neon(ring, input, output) };
+        return;
+    }
+    reduce_i64_channel_scalar(ring, input, output);
+}
+
+fn reduce_centered_i32_channel_scalar<const N: usize>(
+    ring: &Ring32<N>,
+    input: &[i32; N],
+    output: &mut [u32; N],
+) {
+    for (out, &value) in output.iter_mut().zip(input) {
+        let negative = 0u32.wrapping_sub((value < 0) as u32);
+        *out = (value as u32 & !negative) | ((ring.q - value.unsigned_abs()) & negative);
+    }
+}
+
+/// Reduce centered signed coefficients into canonical residues.
+pub fn reduce_centered_i32_into<const N: usize>(
+    ring: &Ring32<N>,
+    input: &[i32; N],
+    output: &mut [u32; N],
+) {
+    debug_assert!(input.iter().all(|value| value.unsigned_abs() < ring.q));
+    #[cfg(target_arch = "x86_64")]
+    if N >= 8 && N.is_multiple_of(8) && avx2_available() {
+        unsafe { avx2::reduce_centered_i32_avx2(ring, input, output) };
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if N >= 4 && N.is_multiple_of(4) {
+        unsafe { neon::reduce_centered_i32_neon(ring, input, output) };
+        return;
+    }
+    reduce_centered_i32_channel_scalar(ring, input, output);
+}
+
+fn lift_centered_i64_rns2_scalar<const N: usize>(
+    ring: &Rns<N, 2>,
+    input: &Residues<N, 2>,
+    output: &mut [i64; N],
+) {
+    let q0 = ring.ch[0].q;
+    let q1 = ring.ch[1].q;
+    let product = q0 as u64 * q1 as u64;
+    for (i, out) in output.iter_mut().enumerate() {
+        let r0_mod_q1 = input[0][i] % q1;
+        let delta = sub_mod(input[1][i], r0_mod_q1, q1);
+        let digit = mul_mod(delta, ring.prefix_inverses[1], &ring.ch[1]);
+        let value = input[0][i] as u64 + q0 as u64 * digit as u64;
+        *out = value as i64 - (value > product / 2) as i64 * product as i64;
+    }
+}
+
+fn lift_centered_i64_rns2<const N: usize>(
+    ring: &Rns<N, 2>,
+    input: &Residues<N, 2>,
+    output: &mut [i64; N],
+) {
+    #[cfg(target_arch = "x86_64")]
+    if N >= 8 && N.is_multiple_of(8) && avx2_available() {
+        unsafe { avx2::lift_centered_i64_avx2(ring, input, output) };
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if N >= 4 && N.is_multiple_of(4) {
+        unsafe { neon::lift_centered_i64_neon(ring, input, output) };
+        return;
+    }
+    lift_centered_i64_rns2_scalar(ring, input, output);
 }
 
 fn inverse_mod(value: u32, modulus: u32) -> Option<u32> {
@@ -465,7 +583,7 @@ pub fn pointwise_mac<const N: usize, const LIMBS: usize>(
 
 #[cfg(target_arch = "x86_64")]
 mod avx2 {
-    use super::Ring32;
+    use super::{Residues, Ring32, Rns};
     use std::arch::x86_64::*;
 
     const LANES: usize = 8;
@@ -537,6 +655,12 @@ mod avx2 {
     #[target_feature(enable = "avx2")]
     unsafe fn mont_mul_half(a: __m256i, b: __m256i, q64_v: __m256i, qinv_v: __m256i) -> __m256i {
         let x = _mm256_mul_epu32(a, b);
+        mont_reduce_half(x, q64_v, qinv_v)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn mont_reduce_half(x: __m256i, q64_v: __m256i, qinv_v: __m256i) -> __m256i {
         let m = _mm256_and_si256(_mm256_mul_epu32(x, qinv_v), lo_mask());
         let t = _mm256_srli_epi64(_mm256_add_epi64(x, _mm256_mul_epu32(m, q64_v)), 32);
         csub64(t, q64_v)
@@ -813,11 +937,137 @@ mod avx2 {
             _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, canon, q_v));
         }
     }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn reduce_i64x4<const N: usize>(ring: &Ring32<N>, value: __m256i) -> __m256i {
+        let mask = lo_mask();
+        let q = _mm256_set1_epi64x(ring.q as i64);
+        let q_inv = _mm256_set1_epi64x(ring.q_inv_neg as i64);
+        let radix = _mm256_set1_epi64x(((1u64 << 32) % ring.q as u64) as i64);
+        let r2 = _mm256_set1_epi64x(ring.r2 as i64);
+        let sign = _mm256_cmpgt_epi64(_mm256_setzero_si256(), value);
+        let magnitude = _mm256_sub_epi64(_mm256_xor_si256(value, sign), sign);
+        let low = _mm256_and_si256(magnitude, mask);
+        let high = _mm256_srli_epi64::<32>(magnitude);
+        let combined = _mm256_add_epi64(low, _mm256_mul_epu32(high, radix));
+        let montgomery = mont_reduce_half(combined, q, q_inv);
+        let residue = mont_mul_half(montgomery, r2, q, q_inv);
+        let negated = csub64(_mm256_sub_epi64(q, residue), q);
+        _mm256_blendv_epi8(residue, negated, sign)
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn reduce_i64_avx2<const N: usize>(
+        ring: &Ring32<N>,
+        input: &[i64; N],
+        output: &mut [u32; N],
+    ) {
+        for offset in (0..N).step_by(4) {
+            let value = _mm256_loadu_si256(input.as_ptr().add(offset) as *const __m256i);
+            let residue = reduce_i64x4(ring, value);
+            let mut lanes = [0u64; 4];
+            _mm256_storeu_si256(lanes.as_mut_ptr() as *mut __m256i, residue);
+            for lane in 0..4 {
+                output[offset + lane] = lanes[lane] as u32;
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn reduce_centered_i32_avx2<const N: usize>(
+        ring: &Ring32<N>,
+        input: &[i32; N],
+        output: &mut [u32; N],
+    ) {
+        let q = _mm256_set1_epi32(ring.q as i32);
+        for offset in (0..N).step_by(LANES) {
+            let value = _mm256_loadu_si256(input.as_ptr().add(offset) as *const __m256i);
+            let negative = _mm256_cmpgt_epi32(_mm256_setzero_si256(), value);
+            let magnitude = _mm256_abs_epi32(value);
+            let residue = _mm256_blendv_epi8(value, _mm256_sub_epi32(q, magnitude), negative);
+            _mm256_storeu_si256(output.as_mut_ptr().add(offset) as *mut __m256i, residue);
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn lift_centered_i64_avx2<const N: usize>(
+        ring: &Rns<N, 2>,
+        input: &Residues<N, 2>,
+        output: &mut [i64; N],
+    ) {
+        let q0 = ring.ch[0].q as u64;
+        let q1 = ring.ch[1].q;
+        let product = q0 * q1 as u64;
+        let q1v = _mm256_set1_epi64x(q1 as i64);
+        let q1inv = _mm256_set1_epi64x(ring.ch[1].q_inv_neg as i64);
+        let prefix = _mm256_set1_epi32(ring.prefix_inverses[1] as i32);
+        let r2 = _mm256_set1_epi32(ring.ch[1].r2 as i32);
+        if q0 < 2 * q1 as u64 {
+            let q1_32 = _mm256_set1_epi32(q1 as i32);
+            let q0_64 = _mm256_set1_epi64x(q0 as i64);
+            for offset in (0..N).step_by(LANES) {
+                let r0 = _mm256_loadu_si256(input[0].as_ptr().add(offset) as *const __m256i);
+                let r1 = _mm256_loadu_si256(input[1].as_ptr().add(offset) as *const __m256i);
+                let reduced_r0 = _mm256_blendv_epi8(
+                    r0,
+                    _mm256_sub_epi32(r0, q1_32),
+                    _mm256_cmpgt_epi32(r0, _mm256_set1_epi32(q1 as i32 - 1)),
+                );
+                let difference = _mm256_sub_epi32(r1, reduced_r0);
+                let delta = _mm256_add_epi32(
+                    difference,
+                    _mm256_and_si256(
+                        _mm256_cmpgt_epi32(_mm256_setzero_si256(), difference),
+                        q1_32,
+                    ),
+                );
+                let digit = mont_mul_v(mont_mul_v(delta, prefix, q1v, q1inv), r2, q1v, q1inv);
+                let even = _mm256_add_epi64(
+                    _mm256_and_si256(r0, lo_mask()),
+                    _mm256_mul_epu32(digit, q0_64),
+                );
+                let odd = _mm256_add_epi64(
+                    _mm256_srli_epi64::<32>(r0),
+                    _mm256_mul_epu32(_mm256_srli_epi64::<32>(digit), q0_64),
+                );
+                let mut even_lanes = [0u64; 4];
+                let mut odd_lanes = [0u64; 4];
+                _mm256_storeu_si256(even_lanes.as_mut_ptr() as *mut __m256i, even);
+                _mm256_storeu_si256(odd_lanes.as_mut_ptr() as *mut __m256i, odd);
+                for lane in 0..4 {
+                    for (index, value) in [
+                        (2 * lane, even_lanes[lane]),
+                        (2 * lane + 1, odd_lanes[lane]),
+                    ] {
+                        output[offset + index] =
+                            value as i64 - (value > product / 2) as i64 * product as i64;
+                    }
+                }
+            }
+            return;
+        }
+        for offset in (0..N).step_by(LANES) {
+            let delta: [u32; LANES] = core::array::from_fn(|lane| {
+                let i = offset + lane;
+                super::sub_mod(input[1][i], input[0][i] % q1, q1)
+            });
+            let delta = _mm256_loadu_si256(delta.as_ptr() as *const __m256i);
+            let digit = mont_mul_v(mont_mul_v(delta, prefix, q1v, q1inv), r2, q1v, q1inv);
+            let mut digits = [0u32; LANES];
+            _mm256_storeu_si256(digits.as_mut_ptr() as *mut __m256i, digit);
+            for lane in 0..LANES {
+                let value = input[0][offset + lane] as u64 + q0 * digits[lane] as u64;
+                output[offset + lane] =
+                    value as i64 - (value > product / 2) as i64 * product as i64;
+            }
+        }
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
 mod neon {
-    use super::{mul_mod, Residues, Ring32};
+    use super::{mul_mod, Residues, Ring32, Rns};
     use core::arch::{aarch64::*, asm};
 
     const LANES: usize = 4;
@@ -912,6 +1162,11 @@ mod neon {
         q_inv_v: uint32x2_t,
     ) -> uint32x2_t {
         let x = vmull_u32(a, b);
+        mont_reduce_half(x, q_v, q_inv_v)
+    }
+
+    #[inline(always)]
+    unsafe fn mont_reduce_half(x: uint64x2_t, q_v: uint32x2_t, q_inv_v: uint32x2_t) -> uint32x2_t {
         let m = vmul_u32(vmovn_u64(x), q_inv_v);
         let t = vshrq_n_u64::<32>(vaddq_u64(x, vmull_u32(m, q_v)));
         vmovn_u64(t)
@@ -1198,6 +1453,124 @@ mod neon {
                 sum = super::add_mod(sum, mul_mod(a[k][ch][i], b[k][ch][i], ring), ring.q);
             }
             acc[i] = super::add_mod(acc[i], sum, ring.q);
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn reduce_i64x2<const N: usize>(ring: &Ring32<N>, value: int64x2_t) -> uint32x2_t {
+        let q = vdup_n_u32(ring.q);
+        let q_inv = vdup_n_u32(ring.q_inv_neg);
+        let radix = vdup_n_u32(((1u64 << 32) % ring.q as u64) as u32);
+        let r2 = vdup_n_u32(ring.r2);
+        let negative64 = vcltq_s64(value, vdupq_n_s64(0));
+        let magnitude = vreinterpretq_u64_s64(vabsq_s64(value));
+        let low = vmovn_u64(magnitude);
+        let high = vmovn_u64(vshrq_n_u64::<32>(magnitude));
+        let combined = vaddq_u64(vmovl_u32(low), vmull_u32(high, radix));
+        let montgomery = mont_reduce_half(combined, q, q_inv);
+        let residue = mont_mul_half(montgomery, r2, q, q_inv);
+        let residue = vsub_u32(residue, vand_u32(vcge_u32(residue, q), q));
+        let negated = vsub_u32(q, residue);
+        let negated = vsub_u32(negated, vand_u32(vcge_u32(negated, q), q));
+        let negative = vmovn_u64(negative64);
+        vbsl_u32(negative, negated, residue)
+    }
+
+    pub(super) unsafe fn reduce_i64_neon<const N: usize>(
+        ring: &Ring32<N>,
+        input: &[i64; N],
+        output: &mut [u32; N],
+    ) {
+        for offset in (0..N).step_by(2) {
+            let value = vld1q_s64(input.as_ptr().add(offset));
+            vst1_u32(output.as_mut_ptr().add(offset), reduce_i64x2(ring, value));
+        }
+    }
+
+    pub(super) unsafe fn reduce_centered_i32_neon<const N: usize>(
+        ring: &Ring32<N>,
+        input: &[i32; N],
+        output: &mut [u32; N],
+    ) {
+        let q = vdupq_n_u32(ring.q);
+        for offset in (0..N).step_by(LANES) {
+            let value = vld1q_s32(input.as_ptr().add(offset));
+            let negative = vcltq_s32(value, vdupq_n_s32(0));
+            let magnitude = vreinterpretq_u32_s32(vabsq_s32(value));
+            vst1q_u32(
+                output.as_mut_ptr().add(offset),
+                vbslq_u32(
+                    negative,
+                    vsubq_u32(q, magnitude),
+                    vreinterpretq_u32_s32(value),
+                ),
+            );
+        }
+    }
+
+    pub(super) unsafe fn lift_centered_i64_neon<const N: usize>(
+        ring: &Rns<N, 2>,
+        input: &Residues<N, 2>,
+        output: &mut [i64; N],
+    ) {
+        let q0 = ring.ch[0].q as u64;
+        let q1 = ring.ch[1].q;
+        let product = q0 * q1 as u64;
+        let prefix = vdupq_n_u32(ring.prefix_inverses[1]);
+        let r2 = vdupq_n_u32(ring.ch[1].r2);
+        if q0 < 2 * q1 as u64 {
+            let q1v = vdupq_n_u32(q1);
+            for offset in (0..N).step_by(LANES) {
+                let r0 = vld1q_u32(input[0].as_ptr().add(offset));
+                let r1 = vld1q_u32(input[1].as_ptr().add(offset));
+                let reduced_r0 = vsubq_u32(r0, vandq_u32(vcgeq_u32(r0, q1v), q1v));
+                let difference = vsubq_u32(r1, reduced_r0);
+                let delta = vaddq_u32(difference, vandq_u32(vcltq_u32(r1, reduced_r0), q1v));
+                let digit = mont_mul_v(
+                    mont_mul_v(delta, prefix, q1, ring.ch[1].q_inv_neg),
+                    r2,
+                    q1,
+                    ring.ch[1].q_inv_neg,
+                );
+                let low = vaddq_u64(
+                    vmovl_u32(vget_low_u32(r0)),
+                    vmull_u32(vget_low_u32(digit), vdup_n_u32(q0 as u32)),
+                );
+                let high = vaddq_u64(
+                    vmovl_u32(vget_high_u32(r0)),
+                    vmull_u32(vget_high_u32(digit), vdup_n_u32(q0 as u32)),
+                );
+                let half = vdupq_n_u64(product / 2);
+                let product_v = vdupq_n_u64(product);
+                let low = vsubq_u64(low, vandq_u64(vcgtq_u64(low, half), product_v));
+                let high = vsubq_u64(high, vandq_u64(vcgtq_u64(high, half), product_v));
+                vst1q_s64(output.as_mut_ptr().add(offset), vreinterpretq_s64_u64(low));
+                vst1q_s64(
+                    output.as_mut_ptr().add(offset + 2),
+                    vreinterpretq_s64_u64(high),
+                );
+            }
+            return;
+        }
+        for offset in (0..N).step_by(LANES) {
+            let delta: [u32; LANES] = core::array::from_fn(|lane| {
+                let i = offset + lane;
+                super::sub_mod(input[1][i], input[0][i] % q1, q1)
+            });
+            let delta = vld1q_u32(delta.as_ptr());
+            let digit = mont_mul_v(
+                mont_mul_v(delta, prefix, q1, ring.ch[1].q_inv_neg),
+                r2,
+                q1,
+                ring.ch[1].q_inv_neg,
+            );
+            let mut digits = [0u32; LANES];
+            vst1q_u32(digits.as_mut_ptr(), digit);
+            for lane in 0..LANES {
+                let value = input[0][offset + lane] as u64 + q0 * digits[lane] as u64;
+                output[offset + lane] =
+                    value as i64 - (value > product / 2) as i64 * product as i64;
+            }
         }
     }
 }
