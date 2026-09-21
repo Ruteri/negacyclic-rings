@@ -72,20 +72,6 @@ pub fn mul_mod<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
     mont_mul(mont_mul(a, b, ring), ring.r2, ring)
 }
 
-#[inline]
-pub fn add_assign<const N: usize>(ring: &Ring64<N>, lhs: &mut [u64; N], rhs: &[u64; N]) {
-    for (x, &y) in lhs.iter_mut().zip(rhs) {
-        *x = add_mod(*x, y, ring.q);
-    }
-}
-
-#[inline]
-pub fn sub_assign<const N: usize>(ring: &Ring64<N>, lhs: &mut [u64; N], rhs: &[u64; N]) {
-    for (x, &y) in lhs.iter_mut().zip(rhs) {
-        *x = sub_mod(*x, y, ring.q);
-    }
-}
-
 /// Scalar on purpose: x86-64 has no 64x64->128 vector multiply, so the AVX2
 /// Montgomery emulation loses to a scalar `mulx` here (measured 2.2x slower).
 #[inline]
@@ -218,46 +204,6 @@ pub fn inv_ntt<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
 }
 
 // ---------------------------------------------------------------
-// Pointwise multiply-accumulate (NTT-domain inner products).
-// Accumulates Montgomery-domain products, converting to canonical once per
-// coefficient at the end: mont(Σ mont(a·b) · r2) = Σ a·b.
-// ---------------------------------------------------------------
-
-fn pointwise_mac_scalar<const N: usize>(
-    ring: &Ring64<N>,
-    acc: &mut [u64; N],
-    a: &[&[u64; N]],
-    b: &[&[u64; N]],
-) {
-    let q = ring.q;
-    let mut mont_acc = [0u64; N];
-    for (av, bv) in a.iter().zip(b.iter()) {
-        for i in 0..N {
-            mont_acc[i] = add_mod(mont_acc[i], mont_mul(av[i], bv[i], ring), q);
-        }
-    }
-    for i in 0..N {
-        acc[i] = add_mod(acc[i], mont_mul(mont_acc[i], ring.r2, ring), q);
-    }
-}
-
-/// `acc[i] += Σ_k a[k][i]·b[k][i] (mod q)` for canonical inputs.
-pub fn pointwise_mac<const N: usize>(
-    ring: &Ring64<N>,
-    acc: &mut [u64; N],
-    a: &[&[u64; N]],
-    b: &[&[u64; N]],
-) {
-    debug_assert_eq!(a.len(), b.len());
-    #[cfg(target_arch = "x86_64")]
-    if N >= 4 && avx2_available() {
-        unsafe { avx2::pointwise_mac_avx2(ring, acc, a, b) };
-        return;
-    }
-    pointwise_mac_scalar(ring, acc, a, b);
-}
-
-// ---------------------------------------------------------------
 // AVX2 kernels (4 × u64 lanes). 64×64 products are decomposed into
 // `_mm256_mul_epu32` partial products; all values stay < 2^62 so signed
 // 64-bit lane compares are safe for conditional subtracts.
@@ -335,21 +281,6 @@ mod avx2 {
         let d = _mm256_sub_epi64(a, b);
         let neg = _mm256_cmpgt_epi64(_mm256_setzero_si256(), d);
         _mm256_add_epi64(d, _mm256_and_si256(neg, q_v))
-    }
-
-    /// Montgomery product `a·b·2^-64 mod q`, canonical output in `[0, q)`.
-    #[inline]
-    #[target_feature(enable = "avx2")]
-    unsafe fn mont_mul_v(a: __m256i, b: __m256i, q_v: __m256i, qinv_v: __m256i) -> __m256i {
-        let lo = mullo64(a, b);
-        let hi = umulhi64(a, b);
-        let m = mullo64(lo, qinv_v);
-        let mhi = umulhi64(m, q_v);
-        // (x + m·q) >> 64 = hi + mhi + (lo != 0): low words cancel exactly.
-        let lo_nz = _mm256_cmpeq_epi64(lo, _mm256_setzero_si256());
-        let carry = _mm256_add_epi64(_mm256_set1_epi64x(1), lo_nz); // 1 if lo≠0 else 0
-        let t = _mm256_add_epi64(_mm256_add_epi64(hi, mhi), carry);
-        csub(t, q_v)
     }
 
     /// `w0` in lane 0 and `w1` in lane 2 — the unused lanes are zero, and a zero
@@ -489,34 +420,6 @@ mod avx2 {
             let ptr = p.as_mut_ptr().add(chunk * 4) as *mut __m256i;
             let v = _mm256_loadu_si256(ptr as *const __m256i);
             _mm256_storeu_si256(ptr, shoup_mul_v(v, n_inv_v, n_inv_s_v, q_v));
-        }
-    }
-
-    #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn pointwise_mac_avx2<const N: usize>(
-        ring: &Ring64<N>,
-        acc: &mut [u64; N],
-        a: &[&[u64; N]],
-        b: &[&[u64; N]],
-    ) {
-        let q_v = _mm256_set1_epi64x(ring.q as i64);
-        let qinv_v = _mm256_set1_epi64x(ring.q_inv_neg as i64);
-        let r2_v = _mm256_set1_epi64x(ring.r2 as i64);
-        for chunk in 0..(N / 4) {
-            let off = chunk * 4;
-            let acc_ptr = acc.as_mut_ptr().add(off) as *mut __m256i;
-            // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-64 mod q.
-            let mut mont_acc = _mm256_setzero_si256();
-            for k in 0..a.len() {
-                let av = _mm256_loadu_si256(a[k].as_ptr().add(off) as *const __m256i);
-                let bv = _mm256_loadu_si256(b[k].as_ptr().add(off) as *const __m256i);
-                let prod = mont_mul_v(av, bv, q_v, qinv_v);
-                mont_acc = add_mod_v(mont_acc, prod, q_v);
-            }
-            // One conversion to canonical per chunk: mont(Σ · r2) = Σ.
-            let canon = mont_mul_v(mont_acc, r2_v, q_v, qinv_v);
-            let acc_v = _mm256_loadu_si256(acc_ptr as *const __m256i);
-            _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, canon, q_v));
         }
     }
 }
