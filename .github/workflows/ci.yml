@@ -28,3 +28,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo test --all-targets
+
+  # Builds and tests github.com/flashbots/panetiere against this commit, so a
+  # change here that breaks its main consumer is caught before merge instead
+  # of surfacing downstream.
+  reverse-dep-panetiere:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: flashbots/panetiere
+          path: panetiere
+      - name: Point panetiere's negacyclic-rings dependency at this checkout
+        run: |
+          {
+            echo
+            echo '[patch."https://github.com/Ruteri/negacyclic-rings"]'
+            echo 'negacyclic-rings = { path = ".." }'
+          } >> panetiere/Cargo.toml
+      - name: Build panetiere against this revision
+        working-directory: panetiere
+        run: cargo build --all-targets
+      - name: Test panetiere against this revision
+        working-directory: panetiere
+        env:
+          CARGO_PROFILE_TEST_OPT_LEVEL: 1
+          RUST_MIN_STACK: 33554432
+        run: cargo test

@@ -240,19 +240,6 @@ impl<const N: usize, const LIMBS: usize> Rns<N, LIMBS> {
             pointwise_mac(ring, &mut acc[i], a, b, i);
         }
     }
-
-    /// Uniform over `Z_product` — independent uniform residues, by CRT.
-    pub fn rand<R: rand::Rng>(&self, rng: &mut R) -> Residues<N, LIMBS> {
-        core::array::from_fn(|i| {
-            core::array::from_fn(|_| {
-                let mut v = rng.next_u32();
-                while v >= self.sample_threshold[i] {
-                    v = rng.next_u32();
-                }
-                v % self.ch[i].q
-            })
-        })
-    }
 }
 
 impl<const N: usize> Rns<N, 2> {
