@@ -1,4 +1,5 @@
-//! 32-bit negacyclic NTT core for single-modulus and RNS arithmetic.
+//! 32-bit negacyclic NTT core for single-modulus and residue-number-system
+//! arithmetic.
 //! Same Shoup/Montgomery scheme as [`super::ntt64`] with R = 2^32, so every
 //! product is a single 32x32->64 multiply instead of a u128.
 //!
@@ -9,6 +10,7 @@
 #![cfg_attr(target_arch = "aarch64", allow(dead_code))]
 
 pub struct Ring32<const N: usize> {
+    /// The modulus.
     pub q: u32,
     /// `-(q^-1) mod 2^32`.
     pub q_inv_neg: u32,
@@ -102,269 +104,11 @@ pub fn pointwise_mul<const N: usize>(ring: &Ring32<N>, lhs: &[u32; N], rhs: &[u3
     }
 }
 
-/// A fixed-size RNS chain. Arithmetic runs independently per channel and
-/// reconstruction uses mixed-radix Garner lifting.
-pub struct Rns<const N: usize, const LIMBS: usize> {
-    pub ch: [Ring32<N>; LIMBS],
-    pub sample_threshold: [u32; LIMBS],
-    /// Product of channels preceding `i`; entry zero is one.
-    pub prefix_products: [u128; LIMBS],
-    /// `prefix_products[i]^-1 mod ch[i].q`; entry zero is unused.
-    pub prefix_inverses: [u32; LIMBS],
-    pub product: u128,
-}
-
-pub type Residues<const N: usize, const LIMBS: usize> = [[u32; N]; LIMBS];
-
-impl<const N: usize, const LIMBS: usize> Rns<N, LIMBS> {
-    pub fn new(ch: [Ring32<N>; LIMBS]) -> Self {
-        assert!(LIMBS > 0, "RNS needs at least one channel");
-        let mut prefix_products = [1u128; LIMBS];
-        let mut prefix_inverses = [0u32; LIMBS];
-        let mut product = 1u128;
-        for i in 0..LIMBS {
-            let q = ch[i].q;
-            assert!(q > 1, "RNS channel modulus must exceed one");
-            if i != 0 {
-                prefix_products[i] = product;
-                prefix_inverses[i] = inverse_mod((product % q as u128) as u32, q)
-                    .expect("RNS channel moduli must be pairwise coprime");
-            }
-            product = product
-                .checked_mul(q as u128)
-                .expect("RNS product exceeds u128");
-        }
-        let sample_threshold =
-            core::array::from_fn(|i| (((1u64 << 32) / ch[i].q as u64) * ch[i].q as u64) as u32);
-        Self {
-            ch,
-            sample_threshold,
-            prefix_products,
-            prefix_inverses,
-            product,
-        }
-    }
-
-    #[inline]
-    pub fn reduce_coeff(&self, x: i128) -> [u32; LIMBS] {
-        core::array::from_fn(|i| x.rem_euclid(self.ch[i].q as i128) as u32)
-    }
-
-    /// Reduce signed coefficients into canonical residues for every channel.
-    pub fn reduce_i64_into(&self, input: &[i64; N], output: &mut Residues<N, LIMBS>) {
-        for (ring, channel) in self.ch.iter().zip(output.iter_mut()) {
-            reduce_i64_channel(ring, input, channel);
-        }
-    }
-
-    /// Reduce centered coefficients into every RNS channel. Each coefficient's
-    /// magnitude must be smaller than every channel modulus.
-    pub fn reduce_centered_i32_into(&self, input: &[i32; N], output: &mut Residues<N, LIMBS>) {
-        debug_assert!(input
-            .iter()
-            .all(|value| self.ch.iter().all(|ring| value.unsigned_abs() < ring.q)));
-        for (ring, channel) in self.ch.iter().zip(output.iter_mut()) {
-            reduce_centered_i32_into(ring, input, channel);
-        }
-    }
-
-    /// Garner lift into `[0, product)`.
-    #[inline]
-    pub fn lift_coeff(&self, r: [u32; LIMBS]) -> u128 {
-        assert!(LIMBS > 0, "RNS needs at least one channel");
-        let mut x = r[0] as u128;
-        for i in 1..LIMBS {
-            let q = self.ch[i].q as u128;
-            let delta = (r[i] as u128 + q - x % q) % q;
-            let digit = delta * self.prefix_inverses[i] as u128 % q;
-            x += self.prefix_products[i] * digit;
-        }
-        x
-    }
-
-    /// Garner lift into the centered interval `(-product/2, product/2]`.
-    #[inline]
-    pub fn lift_centered(&self, r: [u32; LIMBS]) -> i128 {
-        assert!(
-            self.product <= i128::MAX as u128,
-            "centered lift exceeds i128"
-        );
-        let x = self.lift_coeff(r);
-        if x > self.product / 2 {
-            x as i128 - self.product as i128
-        } else {
-            x as i128
-        }
-    }
-
-    pub fn forward(&self, res: &mut Residues<N, LIMBS>) {
-        for (c, ring) in res.iter_mut().zip(&self.ch) {
-            ntt(ring, c);
-        }
-    }
-
-    pub fn inverse(&self, res: &mut Residues<N, LIMBS>) {
-        for (c, ring) in res.iter_mut().zip(&self.ch) {
-            inv_ntt(ring, c);
-        }
-    }
-
-    pub fn add_assign(&self, lhs: &mut Residues<N, LIMBS>, rhs: &Residues<N, LIMBS>) {
-        for ((l, r), ring) in lhs.iter_mut().zip(rhs).zip(&self.ch) {
-            add_assign(ring, l, r);
-        }
-    }
-
-    pub fn sub_assign(&self, lhs: &mut Residues<N, LIMBS>, rhs: &Residues<N, LIMBS>) {
-        for ((l, r), ring) in lhs.iter_mut().zip(rhs).zip(&self.ch) {
-            sub_assign(ring, l, r);
-        }
-    }
-
-    pub fn pointwise_mul(
-        &self,
-        lhs: &Residues<N, LIMBS>,
-        rhs: &Residues<N, LIMBS>,
-    ) -> Residues<N, LIMBS> {
-        core::array::from_fn(|i| pointwise_mul(&self.ch[i], &lhs[i], &rhs[i]))
-    }
-
-    pub fn pointwise_mac(
-        &self,
-        acc: &mut Residues<N, LIMBS>,
-        a: &[&Residues<N, LIMBS>],
-        b: &[&Residues<N, LIMBS>],
-    ) {
-        debug_assert_eq!(a.len(), b.len());
-        for (i, ring) in self.ch.iter().enumerate() {
-            pointwise_mac(ring, &mut acc[i], a, b, i);
-        }
-    }
-
-    /// Uniform over `Z_product` — independent uniform residues, by CRT.
-    pub fn rand<R: rand::Rng>(&self, rng: &mut R) -> Residues<N, LIMBS> {
-        core::array::from_fn(|i| {
-            core::array::from_fn(|_| {
-                let mut v = rng.next_u32();
-                while v >= self.sample_threshold[i] {
-                    v = rng.next_u32();
-                }
-                v % self.ch[i].q
-            })
-        })
-    }
-}
-
-impl<const N: usize> Rns<N, 2> {
-    /// Reconstruct canonical two-limb residues into centered `i64` values.
-    pub fn lift_centered_i64_into(&self, input: &Residues<N, 2>, output: &mut [i64; N]) {
-        assert!(self.product <= i64::MAX as u128, "RNS product exceeds i64");
-        debug_assert!(input[0].iter().all(|&x| x < self.ch[0].q));
-        debug_assert!(input[1].iter().all(|&x| x < self.ch[1].q));
-        lift_centered_i64_rns2(self, input, output);
-    }
-}
-
-fn reduce_i64_channel_scalar<const N: usize>(
-    ring: &Ring32<N>,
-    input: &[i64; N],
-    output: &mut [u32; N],
-) {
-    for (out, &value) in output.iter_mut().zip(input) {
-        *out = value.rem_euclid(ring.q as i64) as u32;
-    }
-}
-
-fn reduce_i64_channel<const N: usize>(ring: &Ring32<N>, input: &[i64; N], output: &mut [u32; N]) {
-    #[cfg(target_arch = "x86_64")]
-    if N >= 4 && N.is_multiple_of(4) && avx2_available() {
-        unsafe { avx2::reduce_i64_avx2(ring, input, output) };
-        return;
-    }
-    #[cfg(target_arch = "aarch64")]
-    if N >= 2 && N.is_multiple_of(2) {
-        unsafe { neon::reduce_i64_neon(ring, input, output) };
-        return;
-    }
-    reduce_i64_channel_scalar(ring, input, output);
-}
-
-fn reduce_centered_i32_channel_scalar<const N: usize>(
-    ring: &Ring32<N>,
-    input: &[i32; N],
-    output: &mut [u32; N],
-) {
-    for (out, &value) in output.iter_mut().zip(input) {
-        let negative = 0u32.wrapping_sub((value < 0) as u32);
-        *out = (value as u32 & !negative) | ((ring.q - value.unsigned_abs()) & negative);
-    }
-}
-
-/// Reduce centered signed coefficients into canonical residues.
-pub fn reduce_centered_i32_into<const N: usize>(
-    ring: &Ring32<N>,
-    input: &[i32; N],
-    output: &mut [u32; N],
-) {
-    debug_assert!(input.iter().all(|value| value.unsigned_abs() < ring.q));
-    #[cfg(target_arch = "x86_64")]
-    if N >= 8 && N.is_multiple_of(8) && avx2_available() {
-        unsafe { avx2::reduce_centered_i32_avx2(ring, input, output) };
-        return;
-    }
-    #[cfg(target_arch = "aarch64")]
-    if N >= 4 && N.is_multiple_of(4) {
-        unsafe { neon::reduce_centered_i32_neon(ring, input, output) };
-        return;
-    }
-    reduce_centered_i32_channel_scalar(ring, input, output);
-}
-
-fn lift_centered_i64_rns2_scalar<const N: usize>(
-    ring: &Rns<N, 2>,
-    input: &Residues<N, 2>,
-    output: &mut [i64; N],
-) {
-    let q0 = ring.ch[0].q;
-    let q1 = ring.ch[1].q;
-    let product = q0 as u64 * q1 as u64;
-    for (i, out) in output.iter_mut().enumerate() {
-        let r0_mod_q1 = input[0][i] % q1;
-        let delta = sub_mod(input[1][i], r0_mod_q1, q1);
-        let digit = mul_mod(delta, ring.prefix_inverses[1], &ring.ch[1]);
-        let value = input[0][i] as u64 + q0 as u64 * digit as u64;
-        *out = value as i64 - (value > product / 2) as i64 * product as i64;
-    }
-}
-
-fn lift_centered_i64_rns2<const N: usize>(
-    ring: &Rns<N, 2>,
-    input: &Residues<N, 2>,
-    output: &mut [i64; N],
-) {
-    #[cfg(target_arch = "x86_64")]
-    if N >= 8 && N.is_multiple_of(8) && avx2_available() {
-        unsafe { avx2::lift_centered_i64_avx2(ring, input, output) };
-        return;
-    }
-    #[cfg(target_arch = "aarch64")]
-    if N >= 4 && N.is_multiple_of(4) {
-        unsafe { neon::lift_centered_i64_neon(ring, input, output) };
-        return;
-    }
-    lift_centered_i64_rns2_scalar(ring, input, output);
-}
-
-fn inverse_mod(value: u32, modulus: u32) -> Option<u32> {
-    let (mut old_r, mut r) = (value as i64, modulus as i64);
-    let (mut old_s, mut s) = (1i64, 0i64);
-    while r != 0 {
-        let quotient = old_r / r;
-        (old_r, r) = (r, old_r - quotient * r);
-        (old_s, s) = (s, old_s - quotient * s);
-    }
-    (old_r == 1).then(|| old_s.rem_euclid(modulus as i64) as u32)
-}
+// `Residues`/`ResidueNumberSystem` live in `super::residue_number_system`;
+// pulled in here (and, transitively, into the `avx2`/`neon` submodules below
+// via `super::`) because `pointwise_mac` and the residue-number-system-
+// specific SIMD kernels are channel-indexed over them.
+use super::residue_number_system::{ResidueNumberSystem, Residues};
 
 // ---------------------------------------------------------------
 // Scalar NTT.
@@ -459,7 +203,7 @@ fn inv_ntt_scalar<const N: usize>(ring: &Ring32<N>, p: &mut [u32; N]) {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn avx2_available() -> bool {
+pub(in crate::poly) fn avx2_available() -> bool {
     std::is_x86_feature_detected!("avx2")
 }
 
@@ -531,18 +275,22 @@ pub fn pointwise_dot<const N: usize>(ring: &Ring32<N>, a: &[[u32; N]], b: &[[u32
     pointwise_dot_scalar(ring, a, b)
 }
 
-fn pointwise_mac_scalar<const N: usize, const LIMBS: usize>(
+fn pointwise_mac_scalar<const N: usize, const CHANNEL_COUNT: usize>(
     ring: &Ring32<N>,
     acc: &mut [u32; N],
-    a: &[&Residues<N, LIMBS>],
-    b: &[&Residues<N, LIMBS>],
-    ch: usize,
+    a: &[&Residues<N, CHANNEL_COUNT>],
+    b: &[&Residues<N, CHANNEL_COUNT>],
+    channel: usize,
 ) {
     let q = ring.q;
     let mut mont_acc = [0u32; N];
     for (av, bv) in a.iter().zip(b.iter()) {
         for i in 0..N {
-            mont_acc[i] = add_mod(mont_acc[i], mont_mul(av[ch][i], bv[ch][i], ring), q);
+            mont_acc[i] = add_mod(
+                mont_acc[i],
+                mont_mul(av[channel][i], bv[channel][i], ring),
+                q,
+            );
         }
     }
     for i in 0..N {
@@ -550,29 +298,29 @@ fn pointwise_mac_scalar<const N: usize, const LIMBS: usize>(
     }
 }
 
-/// `acc[i] += Σ_k a[k][ch][i]·b[k][ch][i] (mod q)` for canonical inputs. Takes
-/// the whole residue arrays and a channel index so the RNS layer needs no
-/// per-channel reference vectors.
-pub fn pointwise_mac<const N: usize, const LIMBS: usize>(
+/// `acc[i] += Σ_k a[k][channel][i]·b[k][channel][i] (mod q)` for canonical inputs. Takes
+/// the whole residue arrays and a channel index so the residue number system
+/// layer needs no per-channel reference vectors.
+pub fn pointwise_mac<const N: usize, const CHANNEL_COUNT: usize>(
     ring: &Ring32<N>,
     acc: &mut [u32; N],
-    a: &[&Residues<N, LIMBS>],
-    b: &[&Residues<N, LIMBS>],
-    ch: usize,
+    a: &[&Residues<N, CHANNEL_COUNT>],
+    b: &[&Residues<N, CHANNEL_COUNT>],
+    channel: usize,
 ) {
     debug_assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "x86_64")]
     if N >= 8 && avx2_available() {
-        unsafe { avx2::pointwise_mac_avx2(ring, acc, a, b, ch) };
+        unsafe { avx2::pointwise_mac_avx2(ring, acc, a, b, channel) };
         return;
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe { neon::pointwise_mac_neon(ring, acc, a, b, ch) };
+        unsafe { neon::pointwise_mac_neon(ring, acc, a, b, channel) };
         return;
     }
     #[cfg(not(target_arch = "aarch64"))]
-    pointwise_mac_scalar(ring, acc, a, b, ch);
+    pointwise_mac_scalar(ring, acc, a, b, channel);
 }
 
 // ---------------------------------------------------------------
@@ -582,8 +330,8 @@ pub fn pointwise_mac<const N: usize, const LIMBS: usize>(
 // ---------------------------------------------------------------
 
 #[cfg(target_arch = "x86_64")]
-mod avx2 {
-    use super::{Residues, Ring32, Rns};
+pub(in crate::poly) mod avx2 {
+    use super::{ResidueNumberSystem, Residues, Ring32};
     use std::arch::x86_64::*;
 
     const LANES: usize = 8;
@@ -911,12 +659,12 @@ mod avx2 {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn pointwise_mac_avx2<const N: usize, const LIMBS: usize>(
+    pub(super) unsafe fn pointwise_mac_avx2<const N: usize, const CHANNEL_COUNT: usize>(
         ring: &Ring32<N>,
         acc: &mut [u32; N],
-        a: &[&super::Residues<N, LIMBS>],
-        b: &[&super::Residues<N, LIMBS>],
-        ch: usize,
+        a: &[&super::Residues<N, CHANNEL_COUNT>],
+        b: &[&super::Residues<N, CHANNEL_COUNT>],
+        channel: usize,
     ) {
         let q_v = _mm256_set1_epi32(ring.q as i32);
         let q64_v = _mm256_set1_epi64x(ring.q as i64);
@@ -927,8 +675,8 @@ mod avx2 {
             let acc_ptr = acc.as_mut_ptr().add(off) as *mut __m256i;
             let mut mont_acc = _mm256_setzero_si256();
             for k in 0..a.len() {
-                let av = _mm256_loadu_si256(a[k][ch].as_ptr().add(off) as *const __m256i);
-                let bv = _mm256_loadu_si256(b[k][ch].as_ptr().add(off) as *const __m256i);
+                let av = _mm256_loadu_si256(a[k][channel].as_ptr().add(off) as *const __m256i);
+                let bv = _mm256_loadu_si256(b[k][channel].as_ptr().add(off) as *const __m256i);
                 let prod = mont_mul_v(av, bv, q64_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
@@ -958,7 +706,7 @@ mod avx2 {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn reduce_i64_avx2<const N: usize>(
+    pub(in crate::poly) unsafe fn reduce_channel_i64_avx2<const N: usize>(
         ring: &Ring32<N>,
         input: &[i64; N],
         output: &mut [u32; N],
@@ -975,7 +723,7 @@ mod avx2 {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn reduce_centered_i32_avx2<const N: usize>(
+    pub(in crate::poly) unsafe fn reduce_centered_i32_avx2<const N: usize>(
         ring: &Ring32<N>,
         input: &[i32; N],
         output: &mut [u32; N],
@@ -991,18 +739,18 @@ mod avx2 {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn lift_centered_i64_avx2<const N: usize>(
-        ring: &Rns<N, 2>,
+    pub(in crate::poly) unsafe fn lift_centered_i64_avx2<const N: usize>(
+        ring: &ResidueNumberSystem<N, 2>,
         input: &Residues<N, 2>,
         output: &mut [i64; N],
     ) {
-        let q0 = ring.ch[0].q as u64;
-        let q1 = ring.ch[1].q;
+        let q0 = ring.channels[0].q as u64;
+        let q1 = ring.channels[1].q;
         let product = q0 * q1 as u64;
         let q1v = _mm256_set1_epi64x(q1 as i64);
-        let q1inv = _mm256_set1_epi64x(ring.ch[1].q_inv_neg as i64);
+        let q1inv = _mm256_set1_epi64x(ring.channels[1].q_inv_neg as i64);
         let prefix = _mm256_set1_epi32(ring.prefix_inverses[1] as i32);
-        let r2 = _mm256_set1_epi32(ring.ch[1].r2 as i32);
+        let r2 = _mm256_set1_epi32(ring.channels[1].r2 as i32);
         if q0 < 2 * q1 as u64 {
             let q1_32 = _mm256_set1_epi32(q1 as i32);
             let q0_64 = _mm256_set1_epi64x(q0 as i64);
@@ -1066,8 +814,8 @@ mod avx2 {
 }
 
 #[cfg(target_arch = "aarch64")]
-mod neon {
-    use super::{mul_mod, Residues, Ring32, Rns};
+pub(in crate::poly) mod neon {
+    use super::{mul_mod, ResidueNumberSystem, Residues, Ring32};
     use core::arch::{aarch64::*, asm};
 
     const LANES: usize = 4;
@@ -1422,12 +1170,12 @@ mod neon {
         }
     }
 
-    pub(super) unsafe fn pointwise_mac_neon<const N: usize, const LIMBS: usize>(
+    pub(super) unsafe fn pointwise_mac_neon<const N: usize, const CHANNEL_COUNT: usize>(
         ring: &Ring32<N>,
         acc: &mut [u32; N],
-        a: &[&Residues<N, LIMBS>],
-        b: &[&Residues<N, LIMBS>],
-        ch: usize,
+        a: &[&Residues<N, CHANNEL_COUNT>],
+        b: &[&Residues<N, CHANNEL_COUNT>],
+        channel: usize,
     ) {
         let q_v = vdupq_n_s32(ring.q as i32);
         let r2 = vdupq_n_u32(ring.r2);
@@ -1435,8 +1183,8 @@ mod neon {
         for off in (0..vector_end).step_by(LANES) {
             let mut mont_acc = vdupq_n_s32(0);
             for k in 0..a.len() {
-                let av = vld1q_u32(a[k][ch].as_ptr().add(off));
-                let bv = vld1q_u32(b[k][ch].as_ptr().add(off));
+                let av = vld1q_u32(a[k][channel].as_ptr().add(off));
+                let bv = vld1q_u32(b[k][channel].as_ptr().add(off));
                 let prod = mont_mul_v(av, bv, ring.q, ring.q_inv_neg);
                 mont_acc = add_mod_v(mont_acc, vreinterpretq_s32_u32(prod), q_v);
             }
@@ -1450,7 +1198,11 @@ mod neon {
         for i in vector_end..N {
             let mut sum = 0;
             for k in 0..a.len() {
-                sum = super::add_mod(sum, mul_mod(a[k][ch][i], b[k][ch][i], ring), ring.q);
+                sum = super::add_mod(
+                    sum,
+                    mul_mod(a[k][channel][i], b[k][channel][i], ring),
+                    ring.q,
+                );
             }
             acc[i] = super::add_mod(acc[i], sum, ring.q);
         }
@@ -1476,7 +1228,7 @@ mod neon {
         vbsl_u32(negative, negated, residue)
     }
 
-    pub(super) unsafe fn reduce_i64_neon<const N: usize>(
+    pub(in crate::poly) unsafe fn reduce_channel_i64_neon<const N: usize>(
         ring: &Ring32<N>,
         input: &[i64; N],
         output: &mut [u32; N],
@@ -1487,7 +1239,7 @@ mod neon {
         }
     }
 
-    pub(super) unsafe fn reduce_centered_i32_neon<const N: usize>(
+    pub(in crate::poly) unsafe fn reduce_centered_i32_neon<const N: usize>(
         ring: &Ring32<N>,
         input: &[i32; N],
         output: &mut [u32; N],
@@ -1508,16 +1260,16 @@ mod neon {
         }
     }
 
-    pub(super) unsafe fn lift_centered_i64_neon<const N: usize>(
-        ring: &Rns<N, 2>,
+    pub(in crate::poly) unsafe fn lift_centered_i64_neon<const N: usize>(
+        ring: &ResidueNumberSystem<N, 2>,
         input: &Residues<N, 2>,
         output: &mut [i64; N],
     ) {
-        let q0 = ring.ch[0].q as u64;
-        let q1 = ring.ch[1].q;
+        let q0 = ring.channels[0].q as u64;
+        let q1 = ring.channels[1].q;
         let product = q0 * q1 as u64;
         let prefix = vdupq_n_u32(ring.prefix_inverses[1]);
-        let r2 = vdupq_n_u32(ring.ch[1].r2);
+        let r2 = vdupq_n_u32(ring.channels[1].r2);
         if q0 < 2 * q1 as u64 {
             let q1v = vdupq_n_u32(q1);
             for offset in (0..N).step_by(LANES) {
@@ -1527,10 +1279,10 @@ mod neon {
                 let difference = vsubq_u32(r1, reduced_r0);
                 let delta = vaddq_u32(difference, vandq_u32(vcltq_u32(r1, reduced_r0), q1v));
                 let digit = mont_mul_v(
-                    mont_mul_v(delta, prefix, q1, ring.ch[1].q_inv_neg),
+                    mont_mul_v(delta, prefix, q1, ring.channels[1].q_inv_neg),
                     r2,
                     q1,
-                    ring.ch[1].q_inv_neg,
+                    ring.channels[1].q_inv_neg,
                 );
                 let low = vaddq_u64(
                     vmovl_u32(vget_low_u32(r0)),
@@ -1559,10 +1311,10 @@ mod neon {
             });
             let delta = vld1q_u32(delta.as_ptr());
             let digit = mont_mul_v(
-                mont_mul_v(delta, prefix, q1, ring.ch[1].q_inv_neg),
+                mont_mul_v(delta, prefix, q1, ring.channels[1].q_inv_neg),
                 r2,
                 q1,
-                ring.ch[1].q_inv_neg,
+                ring.channels[1].q_inv_neg,
             );
             let mut digits = [0u32; LANES];
             vst1q_u32(digits.as_mut_ptr(), digit);
