@@ -3,4 +3,7 @@
 pub mod params;
 pub mod poly;
 
-pub use poly::{arithmetic, decomposition, ntt32, ntt64, Residues, Ring32, Ring64, Rns};
+pub use poly::{
+    arithmetic, decomposition, ntt32, ntt64, residue_number_system, ResidueNumberSystem, Residues,
+    Ring32, Ring64,
+};
