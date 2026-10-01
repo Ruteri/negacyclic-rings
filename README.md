@@ -1,4 +1,6 @@
 # negacyclic-rings
+[![codecov](https://codecov.io/gh/Ruteri/negacyclic-rings/branch/main/graph/badge.svg)](https://codecov.io/gh/Ruteri/negacyclic-rings)
+
 Fast arithmetic for rings `Z_q[X]/(X^N + 1)`.
 Provides const-generic 32-bit and 64-bit negacyclic NTT kernels.
 Supports fixed-size multi-prime residue number system chains with Garner reconstruction.
