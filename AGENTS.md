@@ -1,6 +1,6 @@
 # Repository guide
 
-`negacyclic-rings` implements arithmetic in `Z_q[X]/(X^N + 1)`. It provides const-generic 32-bit and 64-bit rings plus fixed-size, generic residue number system chains. AVX2 is selected at runtime on x86_64; NEON is used directly on AArch64.
+`negacyclic-rings` implements arithmetic in `Z_q[X]/(X^N + 1)`. It provides const-generic 32-bit and 64-bit rings plus fixed-size, generic RNS chains. AVX2 is selected at runtime on x86_64; NEON is used directly on AArch64.
 
 ## Integration
 
@@ -15,7 +15,7 @@ Construct parameters at startup when experimenting:
 
 ```rust
 use negacyclic_rings::params::{find_psi32, generate_ring32};
-use negacyclic_rings::{ntt32, ResidueNumberSystem};
+use negacyclic_rings::{ntt32, Rns};
 
 const N: usize = 2048;
 let q = 16_760_833;
@@ -25,22 +25,22 @@ let mut p = [0u32; N];
 ntt32::ntt(&ring, &mut p);
 ntt32::inv_ntt(&ring, &mut p);
 
-let residue_number_system = ResidueNumberSystem::new([
+let rns = Rns::new([
     generate_ring32::<N>(16_760_833, find_psi32::<N>(16_760_833)),
     generate_ring32::<N>(16_736_257, find_psi32::<N>(16_736_257)),
 ]);
 let mut residues = [[0u32; N]; 2];
-residue_number_system.forward(&mut residues);
-residue_number_system.inverse(&mut residues);
+rns.forward(&mut residues);
+rns.inverse(&mut residues);
 ```
 
-Inputs and outputs are canonical residues in `[0, q)`. Polynomial multiplication is forward NTT on both operands, `pointwise_mul`, then inverse NTT. Use `pointwise_dot` for a single-ring sum of products and `pointwise_mul_accumulate` for residue-number-system accumulation; both convert out of Montgomery form once per result.
+Inputs and outputs are canonical residues in `[0, q)`. Polynomial multiplication is forward NTT on both operands, `pointwise_mul`, then inverse NTT. Use `pointwise_dot` for a single-ring sum of products and `pointwise_mul_accumulate` for RNS accumulation; both convert out of Montgomery form once per result.
 
-Residue number system channels are independent NTT rings. `reduce_coefficient` maps an integer to its channels. `lift_coefficient` reconstructs into `[0, product)` and `lift_centered` into the centered interval. Channel moduli must be pairwise coprime, and their product must fit `u128`.
+RNS channels are independent NTT rings. `reduce_coefficient` maps an integer to its channels. `lift_coefficient` reconstructs into `[0, product)` and `lift_centered` into the centered interval. Channel moduli must be pairwise coprime, and their product must fit `u128`.
 
 ## Parameters
 
-`N` must be a power of two and each prime modulus must satisfy `q = 1 mod 2N`. For `Ring32`, require `2q < 2^31`; 24-bit channels are the preferred residue number system configuration. For `Ring64`, require `q < 2^62`.
+`N` must be a power of two and each prime modulus must satisfy `q = 1 mod 2N`. For `Ring32`, require `2q < 2^31`; 24-bit channels are the preferred RNS configuration. For `Ring64`, require `q < 2^62`.
 
 Runtime generation is convenient but should not be placed on a protocol hot path. Generate checked Rust constants for production:
 
@@ -63,7 +63,7 @@ Run the full suite:
 cargo test --all-targets
 ```
 
-The test profile uses `opt-level = 1` while retaining debug assertions. The tests compare NTT multiplication with schoolbook negacyclic multiplication and cover multi-channel residue number system chains, 24-bit NTTs, pointwise multiplication, and MAC. Run tests natively on AArch64 before accepting NEON changes. A cross-build catches intrinsic and target-specific type errors:
+The test profile uses `opt-level = 1` while retaining debug assertions. The tests compare NTT multiplication with schoolbook negacyclic multiplication and cover multi-channel RNS chains, 24-bit NTTs, pointwise multiplication, and MAC. Run tests natively on AArch64 before accepting NEON changes. A cross-build catches intrinsic and target-specific type errors:
 
 ```sh
 rustup target add aarch64-unknown-linux-gnu
@@ -80,7 +80,7 @@ Run optimized benchmarks on an otherwise idle machine:
 cargo run --release --example bench_ntt
 ```
 
-The example reports median microseconds per operation for 32-bit NTT, 32-bit pointwise multiplication, 64-bit NTT, and two-channel residue number system forward NTT. Compare results only on the same CPU, governor, compiler, and parameter set. Benchmark both x86_64 and AArch64 when changing shared loop structure.
+The example reports median microseconds per operation for 32-bit NTT, 32-bit pointwise multiplication, 64-bit NTT, and two-channel RNS forward NTT. Compare results only on the same CPU, governor, compiler, and parameter set. Benchmark both x86_64 and AArch64 when changing shared loop structure.
 
 ## Profiling
 

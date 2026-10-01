@@ -6,12 +6,12 @@ Sections are filled in as they're reviewed; entries not yet linked to code live 
 
 ## Residue Number System
 
-- H. L. Garner, [The Residue Number System](https://doi.org/10.1109/TEC.1959.5219515) — mixed-radix (Garner) reconstruction for a chain of pairwise-coprime moduli.
-  - `ResidueNumberSystem<N, CHANNEL_COUNT>` holds one `Ring32<N>` channel per modulus `q_i`. `ResidueNumberSystem::new` precomputes the mixed-radix constants the algorithm needs: `prefix_products[i] = ∏_{j<i} q_j` and `prefix_inverses[i] = prefix_products[i]^-1 mod q_i`, via an extended-Euclid inverse. That inverse fails — panicking with a pairwise-coprimality message — if two channel moduli share a factor, which is exactly Garner's pairwise-coprimality requirement.
-  - `ResidueNumberSystem::lift_coefficient` is Garner's algorithm directly: for each channel `i` in turn it solves `digit = (r[i] - x) * prefix_inverses[i] mod q_i` for the next mixed-radix digit and folds it in as `x += prefix_products[i] * digit`, so `x` only ever grows to fit within `∏ q_j` for the channels seen so far.
-  - `ResidueNumberSystem::lift_centered` wraps `lift_coefficient` and recenters the result into `(-product/2, product/2]`.
-  - `ResidueNumberSystem::lift_centered_i64_into` specializes the same two-term recurrence for `CHANNEL_COUNT = 2`, producing an `i64` directly instead of going through `u128`, with AVX2 and NEON kernels that stay colocated with the Montgomery/csub helpers they share with the NTT kernels in `ntt32.rs`.
-  - `ResidueNumberSystem::reduce_coefficient`, `::reduce_coefficients_i64_into`, and `::reduce_coefficients_centered_i32_into` are the forward direction, integer to per-channel residues. They are independent `rem_euclid` calls per channel, not part of Garner's algorithm — Garner only governs reconstruction.
+- H. L. Garner, [The Residue Number System](https://doi.org/10.1109/TEC.1959.5219515) (RNS) — mixed-radix (Garner) reconstruction for a chain of pairwise-coprime moduli.
+  - `Rns<N, CHANNEL_COUNT>` holds one `Ring32<N>` channel per modulus `q_i`. `Rns::new` precomputes the mixed-radix constants the algorithm needs: `prefix_products[i] = ∏_{j<i} q_j` and `prefix_inverses[i] = prefix_products[i]^-1 mod q_i`, via an extended-Euclid inverse. That inverse fails — panicking with a pairwise-coprimality message — if two channel moduli share a factor, which is exactly Garner's pairwise-coprimality requirement.
+  - `Rns::lift_coefficient` is Garner's algorithm directly: for each channel `i` in turn it solves `digit = (r[i] - x) * prefix_inverses[i] mod q_i` for the next mixed-radix digit and folds it in as `x += prefix_products[i] * digit`, so `x` only ever grows to fit within `∏ q_j` for the channels seen so far.
+  - `Rns::lift_centered` wraps `lift_coefficient` and recenters the result into `(-product/2, product/2]`.
+  - `Rns::lift_centered_i64_into` specializes the same two-term recurrence for `CHANNEL_COUNT = 2`, producing an `i64` directly instead of going through `u128`, with AVX2 and NEON kernels that stay colocated with the Montgomery/csub helpers they share with the NTT kernels in `ntt32.rs`.
+  - `Rns::reduce_coefficient`, `::reduce_coefficients_i64_into`, and `::reduce_coefficients_centered_i32_into` are the forward direction, integer to per-channel residues. They are independent `rem_euclid` calls per channel, not part of Garner's algorithm — Garner only governs reconstruction.
 
 ## General
 
