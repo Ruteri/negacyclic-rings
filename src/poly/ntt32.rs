@@ -1,5 +1,4 @@
-//! 32-bit negacyclic NTT core for single-modulus and residue-number-system
-//! arithmetic.
+//! 32-bit negacyclic NTT core for single-modulus and RNS arithmetic.
 //! Same Shoup/Montgomery scheme as [`super::ntt64`] with R = 2^32, so every
 //! product is a single 32x32->64 multiply instead of a u128.
 //!
@@ -104,11 +103,11 @@ pub fn pointwise_mul<const N: usize>(ring: &Ring32<N>, lhs: &[u32; N], rhs: &[u3
     }
 }
 
-// `Residues`/`ResidueNumberSystem` live in `super::residue_number_system`;
-// pulled in here (and, transitively, into the `avx2`/`neon` submodules below
-// via `super::`) because `pointwise_mac` and the residue-number-system-
-// specific SIMD kernels are channel-indexed over them.
-use super::residue_number_system::{ResidueNumberSystem, Residues};
+// `Residues`/`Rns` live in `super::rns`; pulled in here (and, transitively,
+// into the `avx2`/`neon` submodules below via `super::`) because
+// `pointwise_mac` and the RNS-specific SIMD kernels are channel-indexed over
+// them.
+use super::rns::{Residues, Rns};
 
 // ---------------------------------------------------------------
 // Scalar NTT.
@@ -299,8 +298,8 @@ fn pointwise_mac_scalar<const N: usize, const CHANNEL_COUNT: usize>(
 }
 
 /// `acc[i] += Σ_k a[k][channel][i]·b[k][channel][i] (mod q)` for canonical inputs. Takes
-/// the whole residue arrays and a channel index so the residue number system
-/// layer needs no per-channel reference vectors.
+/// the whole residue arrays and a channel index so the RNS layer needs no
+/// per-channel reference vectors.
 pub fn pointwise_mac<const N: usize, const CHANNEL_COUNT: usize>(
     ring: &Ring32<N>,
     acc: &mut [u32; N],
@@ -331,7 +330,7 @@ pub fn pointwise_mac<const N: usize, const CHANNEL_COUNT: usize>(
 
 #[cfg(target_arch = "x86_64")]
 pub(in crate::poly) mod avx2 {
-    use super::{ResidueNumberSystem, Residues, Ring32};
+    use super::{Residues, Ring32, Rns};
     use std::arch::x86_64::*;
 
     const LANES: usize = 8;
@@ -740,7 +739,7 @@ pub(in crate::poly) mod avx2 {
 
     #[target_feature(enable = "avx2")]
     pub(in crate::poly) unsafe fn lift_centered_i64_avx2<const N: usize>(
-        ring: &ResidueNumberSystem<N, 2>,
+        ring: &Rns<N, 2>,
         input: &Residues<N, 2>,
         output: &mut [i64; N],
     ) {
@@ -815,7 +814,7 @@ pub(in crate::poly) mod avx2 {
 
 #[cfg(target_arch = "aarch64")]
 pub(in crate::poly) mod neon {
-    use super::{mul_mod, ResidueNumberSystem, Residues, Ring32};
+    use super::{mul_mod, Residues, Ring32, Rns};
     use core::arch::{aarch64::*, asm};
 
     const LANES: usize = 4;
@@ -1261,7 +1260,7 @@ pub(in crate::poly) mod neon {
     }
 
     pub(in crate::poly) unsafe fn lift_centered_i64_neon<const N: usize>(
-        ring: &ResidueNumberSystem<N, 2>,
+        ring: &Rns<N, 2>,
         input: &Residues<N, 2>,
         output: &mut [i64; N],
     ) {

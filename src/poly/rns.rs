@@ -1,10 +1,9 @@
-//! Fixed-size residue number system chains over [`Ring32`] channels.
+//! Fixed-size RNS chains over [`Ring32`] channels.
 //!
 //! Each channel is an independent `Ring32<N>` (its own NTT-friendly prime);
-//! [`ResidueNumberSystem`] runs per-channel arithmetic and, for
-//! reconstruction, implements Garner's mixed-radix algorithm. See
-//! `REFERENCES.md`, Residue Number System, for the paper this maps to and a
-//! per-function breakdown.
+//! [`Rns`] runs per-channel arithmetic and, for reconstruction, implements
+//! Garner's mixed-radix algorithm. See `REFERENCES.md`, Residue Number
+//! System, for the paper this maps to and a per-function breakdown.
 
 #[cfg(target_arch = "aarch64")]
 use super::ntt32::neon;
@@ -14,9 +13,9 @@ use super::ntt32::{
 #[cfg(target_arch = "x86_64")]
 use super::ntt32::{avx2, avx2_available};
 
-/// A fixed-size residue number system chain. Arithmetic runs independently
-/// per channel and reconstruction uses mixed-radix Garner lifting.
-pub struct ResidueNumberSystem<const N: usize, const CHANNEL_COUNT: usize> {
+/// A fixed-size RNS chain. Arithmetic runs independently per channel and
+/// reconstruction uses mixed-radix Garner lifting.
+pub struct Rns<const N: usize, const CHANNEL_COUNT: usize> {
     /// One ring per channel, each its own prime modulus `q_i` and sharing the
     /// same polynomial degree `N`.
     pub channels: [Ring32<N>; CHANNEL_COUNT],
@@ -40,26 +39,20 @@ pub struct ResidueNumberSystem<const N: usize, const CHANNEL_COUNT: usize> {
 /// One `[u32; N]` array of canonical residues per channel.
 pub type Residues<const N: usize, const CHANNEL_COUNT: usize> = [[u32; N]; CHANNEL_COUNT];
 
-impl<const N: usize, const CHANNEL_COUNT: usize> ResidueNumberSystem<N, CHANNEL_COUNT> {
+impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
     /// Builds a chain from its channels, precomputing the Garner mixed-radix
     /// constants (`prefix_products`/`prefix_inverses`) and the rejection-
     /// sampling threshold `rand` needs. Panics if `CHANNEL_COUNT` is `0`,
     /// any channel's modulus isn't greater than `1`, the moduli aren't
     /// pairwise coprime, or their product overflows `u128`.
     pub fn new(channels: [Ring32<N>; CHANNEL_COUNT]) -> Self {
-        assert!(
-            CHANNEL_COUNT > 0,
-            "residue number system needs at least one channel"
-        );
+        assert!(CHANNEL_COUNT > 0, "RNS needs at least one channel");
         let mut prefix_products = [1u128; CHANNEL_COUNT];
         let mut prefix_inverses = [0u32; CHANNEL_COUNT];
         let mut product = 1u128;
         for i in 0..CHANNEL_COUNT {
             let q = channels[i].q;
-            assert!(
-                q > 1,
-                "residue number system channel modulus must exceed one"
-            );
+            assert!(q > 1, "RNS channel modulus must exceed one");
             if i != 0 {
                 // `product` is still "product of channels before `i`" here
                 // — this channel's own modulus is folded in below. Reduce
@@ -68,13 +61,13 @@ impl<const N: usize, const CHANNEL_COUNT: usize> ResidueNumberSystem<N, CHANNEL_
                 // coprime) takes `u32` operands.
                 prefix_products[i] = product;
                 prefix_inverses[i] = inverse_mod((product % q as u128) as u32, q)
-                    .expect("residue number system channel moduli must be pairwise coprime");
+                    .expect("RNS channel moduli must be pairwise coprime");
             }
             // Fold this channel's modulus into the running product, for the
             // next iteration.
             product = product
                 .checked_mul(q as u128)
-                .expect("residue number system product exceeds u128");
+                .expect("RNS product exceeds u128");
         }
         // One past `u32::MAX`: the exclusive upper bound of the range
         // `rand`'s `next_u32()` draws from.
@@ -116,7 +109,7 @@ fn inverse_mod(value: u32, modulus: u32) -> Option<u32> {
     (previous_remainder == 1).then(|| previous_coefficient.rem_euclid(modulus as i64) as u32)
 }
 
-impl<const N: usize, const CHANNEL_COUNT: usize> ResidueNumberSystem<N, CHANNEL_COUNT> {
+impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
     /// Reduce a signed coefficient into its canonical residue for every
     /// channel.
     #[inline]
@@ -174,8 +167,8 @@ fn reduce_channel_i64_scalar<const N: usize>(
     }
 }
 
-impl<const N: usize, const CHANNEL_COUNT: usize> ResidueNumberSystem<N, CHANNEL_COUNT> {
-    /// Reduce centered coefficients into every residue number system channel.
+impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
+    /// Reduce centered coefficients into every RNS channel.
     /// "Centered" means a signed value near zero (roughly `(-q/2, q/2]`)
     /// rather than a canonical `[0, q)` residue. Each coefficient's
     /// magnitude must be smaller than every channel modulus.
@@ -234,14 +227,11 @@ fn reduce_channel_centered_i32_scalar<const N: usize>(
     }
 }
 
-impl<const N: usize, const CHANNEL_COUNT: usize> ResidueNumberSystem<N, CHANNEL_COUNT> {
+impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
     /// Garner lift into `[0, product)`.
     #[inline]
     pub fn lift_coefficient(&self, r: [u32; CHANNEL_COUNT]) -> u128 {
-        assert!(
-            CHANNEL_COUNT > 0,
-            "residue number system needs at least one channel"
-        );
+        assert!(CHANNEL_COUNT > 0, "RNS needs at least one channel");
         let mut x = r[0] as u128;
         for i in 1..CHANNEL_COUNT {
             let q = self.channels[i].q as u128;
@@ -375,15 +365,12 @@ impl<const N: usize, const CHANNEL_COUNT: usize> ResidueNumberSystem<N, CHANNEL_
     }
 }
 
-impl<const N: usize> ResidueNumberSystem<N, 2> {
+impl<const N: usize> Rns<N, 2> {
     /// Reconstruct canonical two-channel residues into centered `i64`
     /// values. Specializes Garner reconstruction to produce the `i64`
     /// directly, instead of going through `u128`.
     pub fn lift_centered_i64_into(&self, input: &Residues<N, 2>, output: &mut [i64; N]) {
-        assert!(
-            self.product <= i64::MAX as u128,
-            "residue number system product exceeds i64"
-        );
+        assert!(self.product <= i64::MAX as u128, "RNS product exceeds i64");
         debug_assert!(input[0].iter().all(|&x| x < self.channels[0].q));
         debug_assert!(input[1].iter().all(|&x| x < self.channels[1].q));
         lift_two_channel_centered_i64(self, input, output);
@@ -391,7 +378,7 @@ impl<const N: usize> ResidueNumberSystem<N, 2> {
 }
 
 fn lift_two_channel_centered_i64<const N: usize>(
-    ring: &ResidueNumberSystem<N, 2>,
+    ring: &Rns<N, 2>,
     input: &Residues<N, 2>,
     output: &mut [i64; N],
 ) {
@@ -417,7 +404,7 @@ fn lift_two_channel_centered_i64<const N: usize>(
 }
 
 fn lift_two_channel_centered_i64_scalar<const N: usize>(
-    ring: &ResidueNumberSystem<N, 2>,
+    ring: &Rns<N, 2>,
     input: &Residues<N, 2>,
     output: &mut [i64; N],
 ) {
