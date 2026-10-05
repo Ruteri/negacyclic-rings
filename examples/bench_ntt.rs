@@ -58,9 +58,12 @@ fn main() {
     let input_modulus = 139_301i32;
     let signed_i32 =
         core::array::from_fn(|_| rng.gen_range(-input_modulus / 2..=input_modulus / 2));
-    let residues = [a32, core::array::from_fn(|_| rng.gen_range(0..rns.ch[1].q))];
+    let residues = [
+        a32,
+        core::array::from_fn(|_| rng.gen_range(0..rns.channels[1].q)),
+    ];
     println!(
-        "ntt32 fwd={:7.2} pointwise={:7.2}  ntt64 fwd={:7.2}  rns2 fwd={:7.2} us/op",
+        "ntt32 fwd={:7.2} pointwise={:7.2}  ntt64 fwd={:7.2}  2-channel RNS fwd={:7.2} us/op",
         median_us(|| {
             let mut value = *black_box(&a32);
             ntt32::ntt(&ring32, &mut value);
@@ -79,15 +82,15 @@ fn main() {
         }),
     );
     println!(
-        "rns2 reduce-i64={:7.2} us/op",
+        "2-channel RNS reduce-i64={:7.2} us/op",
         median_us(|| {
             let mut output = [[0u32; N]; 2];
-            rns.reduce_i64_into(black_box(&signed), &mut output);
+            rns.reduce_coefficients_i64_into(black_box(&signed), &mut output);
             output[0][0] as u64
         }),
     );
     println!(
-        "rns2 reduce-i32={:7.2} lift={:7.2} us/op",
+        "2-channel RNS reduce-i32={:7.2} lift={:7.2} us/op",
         median_us(|| {
             let mut output = [[0u32; N]; 2];
             rns.reduce_centered_i32_into(black_box(&signed_i32), &mut output);
