@@ -165,7 +165,7 @@ fn bulk_centered_i32_reduction_matches_scalar() {
     let cases = [-input_modulus / 2, -1, 0, 1, input_modulus / 2];
     let input = core::array::from_fn(|i| cases[i % cases.len()]);
     let mut residues = [[0u32; N]; 2];
-    rns.reduce_coefficients_centered_i32_into(&input, &mut residues);
+    rns.reduce_centered_i32_into(&input, &mut residues);
     for i in 0..N {
         assert_eq!(
             [residues[0][i], residues[1][i]],

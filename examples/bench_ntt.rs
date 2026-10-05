@@ -93,7 +93,7 @@ fn main() {
         "2-channel RNS reduce-i32={:7.2} lift={:7.2} us/op",
         median_us(|| {
             let mut output = [[0u32; N]; 2];
-            rns.reduce_coefficients_centered_i32_into(black_box(&signed_i32), &mut output);
+            rns.reduce_centered_i32_into(black_box(&signed_i32), &mut output);
             output[0][0] as u64
         }),
         median_us(|| {

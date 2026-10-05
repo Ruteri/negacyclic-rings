@@ -44,7 +44,7 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
     /// constants (`prefix_products`/`prefix_inverses`) and the rejection-
     /// sampling threshold `rand` needs. Panics if `CHANNEL_COUNT` is `0`,
     /// any channel's modulus isn't greater than `1`, the moduli aren't
-    /// pairwise coprime, or their product overflows `u128`.
+    /// pairwise coprime, or their product doesn't fit in `u128`.
     pub fn new(channels: [Ring32<N>; CHANNEL_COUNT]) -> Self {
         assert!(CHANNEL_COUNT > 0, "RNS needs at least one channel");
         let mut prefix_products = [1u128; CHANNEL_COUNT];
@@ -57,8 +57,7 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
                 // `product` is still "product of channels before `i`" here
                 // — this channel's own modulus is folded in below. Reduce
                 // it mod `q` before inverting, since `inverse_mod` (an
-                // extended-Euclid inverse; `None` iff the two aren't
-                // coprime) takes `u32` operands.
+                // extended-Euclid inverse) takes `u32` operands.
                 prefix_products[i] = product;
                 prefix_inverses[i] = inverse_mod((product % q as u128) as u32, q)
                     .expect("RNS channel moduli must be pairwise coprime");
@@ -72,19 +71,8 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
         // One past `u32::MAX`: the exclusive upper bound of the range
         // `rand`'s `next_u32()` draws from.
         let u32_range = 1u64 << 32;
-        // `floor(u32_range / q) * q`: the largest multiple of `q` that's
-        // still `<= u32_range`. `rand` rejects any draw at or above this, so
-        // the remaining range is an exact multiple of `q` and `v % q` comes
-        // out uniform — otherwise the low residues would be very slightly
-        // over-represented, since `u32_range` is essentially never itself a
-        // multiple of `q`.
-        //
-        // The `as u32` below never truncates: it would only equal
-        // `u32_range` itself (too big for `u32`) if `q` divided `u32_range`
-        // evenly, which requires `q` to be a power of two. Every `Ring32.q`
-        // is an odd prime (enforced by `generate_ring32`, not re-checked
-        // here), and odd numbers greater than one are never powers of two.
         let sample_threshold = core::array::from_fn(|i| {
+            // The cast to `u32` never truncates since every channel modulus is odd.
             ((u32_range / channels[i].q as u64) * channels[i].q as u64) as u32
         });
         Self {
@@ -120,10 +108,6 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
     }
 
     /// Reduce signed coefficients into canonical residues for every channel.
-    /// Writes into `output` rather than returning a new `Residues`, so the
-    /// caller can reuse the same buffer across calls instead of paying to
-    /// copy a potentially large `[[u32; N]; CHANNEL_COUNT]` out of the
-    /// function.
     pub fn reduce_coefficients_i64_into(
         &self,
         input: &[i64; N],
@@ -136,19 +120,11 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
 }
 
 fn reduce_channel_i64<const N: usize>(ring: &Ring32<N>, input: &[i64; N], output: &mut [u32; N]) {
-    // The AVX2 kernel processes 4 `i64`s per 256-bit register, one full
-    // group per loop iteration, with no handling for a partial last group.
-    // `N.is_multiple_of(4)` guarantees the groups divide `N` evenly, so the
-    // last one never reads/writes past the end of `input`/`output`; `N >= 4`
-    // additionally requires at least one full group to exist.
     #[cfg(target_arch = "x86_64")]
     if N >= 4 && N.is_multiple_of(4) && avx2_available() {
         unsafe { avx2::reduce_channel_i64_avx2(ring, input, output) };
         return;
     }
-    // Same reasoning, but NEON processes 2 `i64`s per 128-bit register. NEON
-    // is part of the mandatory AArch64 baseline, so every AArch64 CPU has
-    // it.
     #[cfg(target_arch = "aarch64")]
     if N >= 2 && N.is_multiple_of(2) {
         unsafe { neon::reduce_channel_i64_neon(ring, input, output) };
@@ -169,10 +145,7 @@ fn reduce_channel_i64_scalar<const N: usize>(
 
 impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
     /// Reduce centered coefficients into every RNS channel.
-    /// "Centered" means a signed value near zero (roughly `(-q/2, q/2]`)
-    /// rather than a canonical `[0, q)` residue. Each coefficient's
-    /// magnitude must be smaller than every channel modulus.
-    pub fn reduce_coefficients_centered_i32_into(
+    pub fn reduce_centered_i32_into(
         &self,
         input: &[i32; N],
         output: &mut Residues<N, CHANNEL_COUNT>,
@@ -182,32 +155,22 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
             .iter()
             .all(|ring| value.unsigned_abs() < ring.q)));
         for (ring, channel) in self.channels.iter().zip(output.iter_mut()) {
-            reduce_coefficients_centered_i32_into(ring, input, channel);
+            reduce_centered_i32_into(ring, input, channel);
         }
     }
 }
 
-fn reduce_coefficients_centered_i32_into<const N: usize>(
+fn reduce_centered_i32_into<const N: usize>(
     ring: &Ring32<N>,
     input: &[i32; N],
     output: &mut [u32; N],
 ) {
     debug_assert!(input.iter().all(|value| value.unsigned_abs() < ring.q));
-    // The AVX2 kernel processes 8 `i32`s per 256-bit register — twice as
-    // many as `reduce_channel_i64`'s 4 `i64`s, since `i32` is half the
-    // width — one full group per loop iteration, with no handling for a
-    // partial last group. `N.is_multiple_of(8)` guarantees the groups
-    // divide `N` evenly, so the last one never reads/writes past the end of
-    // `input`/`output`; `N >= 8` additionally requires at least one full
-    // group to exist.
     #[cfg(target_arch = "x86_64")]
     if N >= 8 && N.is_multiple_of(8) && avx2_available() {
         unsafe { avx2::reduce_centered_i32_avx2(ring, input, output) };
         return;
     }
-    // Same reasoning, but NEON processes 4 `i32`s per 128-bit register.
-    // NEON is part of the mandatory AArch64 baseline, so every AArch64 CPU
-    // has it.
     #[cfg(target_arch = "aarch64")]
     if N >= 4 && N.is_multiple_of(4) {
         unsafe { neon::reduce_centered_i32_neon(ring, input, output) };
@@ -257,25 +220,21 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
         }
     }
 
-    /// Forward NTT, in place, independently on every channel. Each channel
-    /// is just its own `Ring32<N>`'s NTT run on its own slice, with no
-    /// interaction between channels.
+    /// Forward NTT, in place. Each channel is just its own `Ring32<N>`'s NTT
+    /// run on its own slice, with no interaction between channels.
     pub fn forward(&self, res: &mut Residues<N, CHANNEL_COUNT>) {
         for (c, ring) in res.iter_mut().zip(&self.channels) {
             ntt(ring, c);
         }
     }
 
-    /// Inverse NTT, in place, independently on every channel.
+    /// Inverse NTT, in place.
     pub fn inverse(&self, res: &mut Residues<N, CHANNEL_COUNT>) {
         for (c, ring) in res.iter_mut().zip(&self.channels) {
             inv_ntt(ring, c);
         }
     }
 
-    /// `left_hand_side += right_hand_side`, channel by channel and
-    /// coefficient by coefficient. Independent per channel — addition
-    /// never carries across channels.
     pub fn add_assign(
         &self,
         left_hand_side: &mut Residues<N, CHANNEL_COUNT>,
@@ -319,10 +278,6 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
         })
     }
 
-    /// `accumulator += Σ_k left_hand_sides[k] · right_hand_sides[k]`,
-    /// pointwise and channel by channel: the fused multiply-accumulate,
-    /// summing several products into `accumulator` in one pass rather than
-    /// a separate `pointwise_mul` plus `add_assign` per term.
     pub fn pointwise_mul_accumulate(
         &self,
         accumulator: &mut Residues<N, CHANNEL_COUNT>,
@@ -367,8 +322,7 @@ impl<const N: usize, const CHANNEL_COUNT: usize> Rns<N, CHANNEL_COUNT> {
 
 impl<const N: usize> Rns<N, 2> {
     /// Reconstruct canonical two-channel residues into centered `i64`
-    /// values. Specializes Garner reconstruction to produce the `i64`
-    /// directly, instead of going through `u128`.
+    /// values.
     pub fn lift_centered_i64_into(&self, input: &Residues<N, 2>, output: &mut [i64; N]) {
         assert!(self.product <= i64::MAX as u128, "RNS product exceeds i64");
         debug_assert!(input[0].iter().all(|&x| x < self.channels[0].q));
@@ -382,19 +336,11 @@ fn lift_two_channel_centered_i64<const N: usize>(
     input: &Residues<N, 2>,
     output: &mut [i64; N],
 ) {
-    // The AVX2 kernel processes 8 residues per 256-bit register, one full
-    // group per loop iteration, with no handling for a partial last group.
-    // `N.is_multiple_of(8)` guarantees the groups divide `N` evenly, so the
-    // last one never reads/writes past the end of `input`/`output`; `N >= 8`
-    // additionally requires at least one full group to exist.
     #[cfg(target_arch = "x86_64")]
     if N >= 8 && N.is_multiple_of(8) && avx2_available() {
         unsafe { avx2::lift_centered_i64_avx2(ring, input, output) };
         return;
     }
-    // Same reasoning, but NEON processes 4 residues per 128-bit register.
-    // NEON is part of the mandatory AArch64 baseline, so every AArch64 CPU
-    // has it.
     #[cfg(target_arch = "aarch64")]
     if N >= 4 && N.is_multiple_of(4) {
         unsafe { neon::lift_centered_i64_neon(ring, input, output) };
