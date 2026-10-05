@@ -11,7 +11,7 @@ Sections are filled in as they're reviewed; entries not yet linked to code live 
   - `Rns::lift_coefficient` is Garner's algorithm directly: for each channel `i` in turn it solves `digit = (r[i] - x) * prefix_inverses[i] mod q_i` for the next mixed-radix digit and folds it in as `x += prefix_products[i] * digit`, so `x` only ever grows to fit within `∏ q_j` for the channels seen so far.
   - `Rns::lift_centered` wraps `lift_coefficient` and recenters the result into `(-product/2, product/2]`.
   - `Rns::lift_centered_i64_into` specializes the same two-term recurrence for `CHANNEL_COUNT = 2`, producing an `i64` directly instead of going through `u128`, with AVX2 and NEON kernels that stay colocated with the Montgomery/csub helpers they share with the NTT kernels in `ntt32.rs`.
-  - `Rns::reduce_coefficient`, `::reduce_coefficients_i64_into`, and `::reduce_coefficients_centered_i32_into` are the forward direction, integer to per-channel residues. They are independent `rem_euclid` calls per channel, not part of Garner's algorithm — Garner only governs reconstruction.
+  - `Rns::reduce_coefficient`, `::reduce_coefficients_i64_into`, and `::reduce_centered_i32_into` are the forward direction, integer to per-channel residues. They are independent `rem_euclid` calls per channel, not part of Garner's algorithm — Garner only governs reconstruction.
 
 ## General
 
