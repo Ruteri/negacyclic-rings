@@ -185,7 +185,7 @@ pub fn pointwise_mul<const N: usize>(ring: &Ring64<N>, lhs: &[u64; N], rhs: &[u6
     core::array::from_fn(|i| mul_mod(lhs[i], rhs[i], ring))
 }
 
-/// Canonical modular product `a·b mod q` for canonical inputs.
+/// Modular product `a·b mod q`, not in Montgomery form, for canonical inputs.
 #[inline(always)]
 pub fn mul_mod<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
     mont_mul(mont_mul(a, b, ring), ring.r2, ring)
@@ -221,8 +221,8 @@ pub fn pointwise_mac<const N: usize>(
     pointwise_mac_scalar(ring, acc, a, b);
 }
 
-// Accumulates Montgomery-domain products, converting to canonical once per
-// coefficient at the end: mont(Σ mont(a·b) · r2) = Σ a·b.
+// Accumulates Montgomery-domain products, converting out of Montgomery form
+// once per coefficient at the end: mont(Σ mont(a·b) · r2) = Σ a·b.
 fn pointwise_mac_scalar<const N: usize>(
     ring: &Ring64<N>,
     acc: &mut [u64; N],
@@ -493,7 +493,7 @@ mod avx2 {
                 let prod = mont_mul_v(av, bv, q_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
-            // One conversion to canonical per chunk: mont(Σ · r2) = Σ.
+            // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
             let canon = mont_mul_v(mont_acc, r2_v, q_v, qinv_v);
             let acc_v = _mm256_loadu_si256(acc_ptr as *const __m256i);
             _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, canon, q_v));

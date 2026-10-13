@@ -72,7 +72,7 @@ pub fn mont_mul<const N: usize>(a: u32, b: u32, ring: &Ring32<N>) -> u32 {
     mont_reduce(a as u64 * b as u64, ring)
 }
 
-/// Canonical modular product `a·b mod q` for canonical inputs.
+/// Modular product `a·b mod q`, not in Montgomery form, for canonical inputs.
 #[inline(always)]
 pub fn mul_mod<const N: usize>(a: u32, b: u32, ring: &Ring32<N>) -> u32 {
     mont_mul(mont_mul(a, b, ring), ring.r2, ring)
@@ -619,7 +619,7 @@ pub(in crate::poly) mod avx2 {
         }
     }
 
-    /// Canonical `lhs[i]·rhs[i] mod q`: two Montgomery rounds, the second
+    /// `lhs[i]·rhs[i] mod q` via two Montgomery rounds, the second
     /// against `r2` to leave the Montgomery domain.
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn pointwise_mul_avx2<const N: usize>(
