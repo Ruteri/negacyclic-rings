@@ -35,7 +35,9 @@ pub struct Ring64<const N: usize> {
     pub n_inv_shoup: u64,
 }
 
-/// Forward NTT over canonical `[0, q)` values, in place.
+/// Forward NTT over canonical `[0, q)` values, in place. The output is
+/// canonical and in bit-reversed order, which `inv_ntt` and the pointwise
+/// functions expect.
 pub fn ntt<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
     assert!(N.is_power_of_two(), "NTT degree must be a power of two");
     #[cfg(target_arch = "x86_64")]
