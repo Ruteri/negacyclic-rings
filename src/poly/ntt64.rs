@@ -13,16 +13,25 @@
 //! Requirements on the modulus: q odd prime, q < 2^62, q ≡ 1 (mod 2N).
 
 pub struct Ring64<const N: usize> {
+    /// The prime modulus: `q = 1 mod 2N`, `q < 2^62`.
     pub q: u64,
-    /// `-(q^-1) mod 2^64`.
+    /// `-(q^-1) mod 2^64`, for Montgomery reduction.
     pub q_inv_neg: u64,
-    /// `2^128 mod q` (Montgomery conversion factor).
+    /// `2^128 mod q`; a Montgomery product with it leaves the Montgomery domain.
     pub r2: u64,
+    /// `psi^bitrev(i)`, the forward twiddles (Longa–Naehrig's `Psi_rev`).
+    /// Entry 0 is unused.
     pub ntt_table: [u64; N],
+    /// `floor(ntt_table[i]·2^64/q)`, Harvey's Shoup companion for each twiddle.
     pub ntt_table_shoup: [u64; N],
+    /// `psi^-bitrev(i)`, the inverse twiddles (Longa–Naehrig's `Psi_rev^-1`).
+    /// Entry 0 is unused.
     pub inv_ntt_table: [u64; N],
+    /// `floor(inv_ntt_table[i]·2^64/q)`, the Shoup companion for each inverse twiddle.
     pub inv_ntt_table_shoup: [u64; N],
+    /// `N^-1 mod q`, the final scale of the inverse NTT.
     pub n_inv: u64,
+    /// `floor(n_inv·2^64/q)`, its Shoup companion.
     pub n_inv_shoup: u64,
 }
 

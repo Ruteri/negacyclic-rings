@@ -9,17 +9,25 @@
 #![cfg_attr(target_arch = "aarch64", allow(dead_code))]
 
 pub struct Ring32<const N: usize> {
-    /// The modulus.
+    /// The prime modulus: `q = 1 mod 2N`, `2q < 2^31`.
     pub q: u32,
-    /// `-(q^-1) mod 2^32`.
+    /// `-(q^-1) mod 2^32`, for Montgomery reduction.
     pub q_inv_neg: u32,
-    /// `2^64 mod q`.
+    /// `2^64 mod q`; a Montgomery product with it leaves the Montgomery domain.
     pub r2: u32,
+    /// `psi^bitrev(i)`, the forward twiddles (Longa–Naehrig's `Psi_rev`).
+    /// Entry 0 is unused.
     pub ntt_table: [u32; N],
+    /// `floor(ntt_table[i]·2^32/q)`, Harvey's Shoup companion for each twiddle.
     pub ntt_table_shoup: [u32; N],
+    /// `psi^-bitrev(i)`, the inverse twiddles (Longa–Naehrig's `Psi_rev^-1`).
+    /// Entry 0 is unused.
     pub inv_ntt_table: [u32; N],
+    /// `floor(inv_ntt_table[i]·2^32/q)`, the Shoup companion for each inverse twiddle.
     pub inv_ntt_table_shoup: [u32; N],
+    /// `N^-1 mod q`, the final scale of the inverse NTT.
     pub n_inv: u32,
+    /// `floor(n_inv·2^32/q)`, its Shoup companion.
     pub n_inv_shoup: u32,
 }
 
