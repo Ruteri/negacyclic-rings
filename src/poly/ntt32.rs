@@ -31,9 +31,10 @@ pub struct Ring32<const N: usize> {
     pub n_inv_shoup: u32,
 }
 
-/// `x - q` if that is non-negative, else `x`. Branchless: `2q < 2^31` means the
-/// difference's sign bit is a valid predicate, so this is a shift and a mask
-/// rather than an unpredictable conditional jump.
+/// Maps `x` in `[0, 2q)` to `[0, q)`: `x - q` if that is non-negative, else
+/// `x`. Branchless: `2q < 2^31` means the difference's sign bit is a valid
+/// predicate, so this is a shift and a mask rather than an unpredictable
+/// conditional jump.
 #[inline(always)]
 fn csub(x: u32, q: u32) -> u32 {
     let d = x.wrapping_sub(q);

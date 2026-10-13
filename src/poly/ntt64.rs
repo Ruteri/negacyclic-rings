@@ -35,18 +35,19 @@ pub struct Ring64<const N: usize> {
     pub n_inv_shoup: u64,
 }
 
-/// `x - q` if that is non-negative, else `x`. Branchless: `q < 2^62` means the
-/// difference's sign bit is a valid predicate, so this is a shift and a mask
-/// rather than an unpredictable conditional jump.
+/// Maps `x` in `[0, 2q)` to `[0, q)`: `x - q` if that is non-negative, else
+/// `x`. Branchless: `q < 2^62` means the difference's sign bit is a valid
+/// predicate, so this is a shift and a mask rather than an unpredictable
+/// conditional jump.
 #[inline(always)]
-fn csub_s(x: u64, q: u64) -> u64 {
+fn csub(x: u64, q: u64) -> u64 {
     let d = x.wrapping_sub(q);
     d.wrapping_add(q & (((d as i64) >> 63) as u64))
 }
 
 #[inline(always)]
 pub fn add_mod(a: u64, b: u64, q: u64) -> u64 {
-    csub_s(a + b, q)
+    csub(a + b, q)
 }
 
 #[inline(always)]
@@ -58,7 +59,7 @@ pub fn sub_mod(a: u64, b: u64, q: u64) -> u64 {
 #[inline(always)]
 fn shoup_mul(a: u64, w: u64, w_shoup: u64, q: u64) -> u64 {
     let qq = ((a as u128 * w_shoup as u128) >> 64) as u64;
-    csub_s(a.wrapping_mul(w).wrapping_sub(qq.wrapping_mul(q)), q)
+    csub(a.wrapping_mul(w).wrapping_sub(qq.wrapping_mul(q)), q)
 }
 
 /// Montgomery reduction: `x < q·2^64` → `x·2^-64 mod q`, canonical.
@@ -66,7 +67,7 @@ fn shoup_mul(a: u64, w: u64, w_shoup: u64, q: u64) -> u64 {
 pub fn mont_reduce<const N: usize>(x: u128, ring: &Ring64<N>) -> u64 {
     let m = (x as u64).wrapping_mul(ring.q_inv_neg);
     let t = ((x + m as u128 * ring.q as u128) >> 64) as u64;
-    csub_s(t, ring.q)
+    csub(t, ring.q)
 }
 
 /// `a·b·2^-64 mod q` (Montgomery-domain product).
