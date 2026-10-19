@@ -34,13 +34,13 @@ rns.forward(&mut residues);
 rns.inverse(&mut residues);
 ```
 
-Inputs and outputs are canonical residues in `[0, q)`. Polynomial multiplication is forward NTT on both operands, `pointwise_mul`, then inverse NTT. Use `pointwise_dot` for a single-ring sum of products and `pointwise_mac` for RNS accumulation; both convert out of Montgomery form once per result.
+Inputs and outputs are canonical residues in `[0, q)`. Polynomial multiplication is forward NTT on both operands, `pointwise_mul`, then inverse NTT. Use `pointwise_dot` for a single-ring sum of products and `pointwise_mul_accumulate` for RNS accumulation; both convert out of Montgomery form once per result.
 
-RNS channels are independent NTT rings. `reduce_coeff` maps an integer to its channels. `lift_coeff` reconstructs into `[0, product)` and `lift_centered` into the centered interval. Channel moduli must be pairwise coprime, and their product must fit `u128`.
+RNS channels are independent NTT rings. `reduce_coefficient` maps an integer to its channels. `lift_coefficient` reconstructs into `[0, product)` and `lift_centered` into the centered interval. Channel moduli must be pairwise coprime, and their product must fit `u128`.
 
 ## Parameters
 
-`N` must be a power of two and each prime modulus must satisfy `q = 1 mod 2N`. For `Ring32`, require `2q < 2^31`; 24-bit limbs are the preferred RNS configuration. For `Ring64`, require `q < 2^62`.
+`N` must be a power of two and each prime modulus must satisfy `q = 1 mod 2N`. For `Ring32`, require `2q < 2^31`; 24-bit channels are the preferred RNS configuration. For `Ring64`, require `q < 2^62`.
 
 Runtime generation is convenient but should not be placed on a protocol hot path. Generate checked Rust constants for production:
 
@@ -63,7 +63,7 @@ Run the full suite:
 cargo test --all-targets
 ```
 
-The test profile uses `opt-level = 1` while retaining debug assertions. The tests compare NTT multiplication with schoolbook negacyclic multiplication and cover multi-limb RNS, 24-bit NTTs, pointwise multiplication, and MAC. Run tests natively on AArch64 before accepting NEON changes. A cross-build catches intrinsic and target-specific type errors:
+The test profile uses `opt-level = 1` while retaining debug assertions. The tests compare NTT multiplication with schoolbook negacyclic multiplication and cover multi-channel RNS chains, 24-bit NTTs, pointwise multiplication, and MAC. Run tests natively on AArch64 before accepting NEON changes. A cross-build catches intrinsic and target-specific type errors:
 
 ```sh
 rustup target add aarch64-unknown-linux-gnu
@@ -80,7 +80,7 @@ Run optimized benchmarks on an otherwise idle machine:
 cargo run --release --example bench_ntt
 ```
 
-The example reports median microseconds per operation for 32-bit NTT, 32-bit pointwise multiplication, 64-bit NTT, and two-limb RNS forward NTT. Compare results only on the same CPU, governor, compiler, and parameter set. Benchmark both x86_64 and AArch64 when changing shared loop structure.
+The example reports median microseconds per operation for 32-bit NTT, 32-bit pointwise multiplication, 64-bit NTT, and two-channel RNS forward NTT. Compare results only on the same CPU, governor, compiler, and parameter set. Benchmark both x86_64 and AArch64 when changing shared loop structure.
 
 ## Profiling
 
