@@ -320,8 +320,9 @@ mod avx2 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn shoup_mul_v(a: __m256i, w_v: __m256i, ws_v: __m256i, q_v: __m256i) -> __m256i {
-        let qq = umulhi64(a, ws_v);
-        let r = _mm256_sub_epi64(mullo64(a, w_v), mullo64(qq, q_v));
+        // Estimated quotient: may be one less than floor(a·w / q), never more.
+        let quotient = umulhi64(a, ws_v);
+        let r = _mm256_sub_epi64(mullo64(a, w_v), mullo64(quotient, q_v));
         csub(r, q_v)
     }
 
