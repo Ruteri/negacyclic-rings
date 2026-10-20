@@ -536,7 +536,7 @@ mod avx2 {
         }
     }
 
-    /// Montgomery product `a·b·2^-64 mod q`, canonical output in `[0, q)`.
+    /// Montgomery product `a·b·2^-64 mod q` for canonical inputs, canonical output in `[0, q)`.
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn mont_mul_v(a: __m256i, b: __m256i, q_v: __m256i, qinv_v: __m256i) -> __m256i {
