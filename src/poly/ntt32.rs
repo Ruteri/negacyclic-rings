@@ -9,23 +9,32 @@
 #![cfg_attr(target_arch = "aarch64", allow(dead_code))]
 
 pub struct Ring32<const N: usize> {
-    /// The modulus.
+    /// The prime modulus: `q = 1 mod 2N`, `2q < 2^31`.
     pub q: u32,
-    /// `-(q^-1) mod 2^32`.
+    /// `-(q^-1) mod 2^32`, for Montgomery reduction.
     pub q_inv_neg: u32,
-    /// `2^64 mod q`.
+    /// `2^64 mod q`; a Montgomery product with it leaves the Montgomery domain.
     pub r2: u32,
+    /// `psi^bitrev(i)`, the forward twiddles (Longa–Naehrig's `Psi_rev`).
+    /// Entry 0 is unused.
     pub ntt_table: [u32; N],
+    /// `floor(ntt_table[i]·2^32/q)`, Harvey's Shoup companion for each twiddle.
     pub ntt_table_shoup: [u32; N],
+    /// `psi^-bitrev(i)`, the inverse twiddles (Longa–Naehrig's `Psi_rev^-1`).
+    /// Entry 0 is unused.
     pub inv_ntt_table: [u32; N],
+    /// `floor(inv_ntt_table[i]·2^32/q)`, the Shoup companion for each inverse twiddle.
     pub inv_ntt_table_shoup: [u32; N],
+    /// `N^-1 mod q`, the final scale of the inverse NTT.
     pub n_inv: u32,
+    /// `floor(n_inv·2^32/q)`, its Shoup companion.
     pub n_inv_shoup: u32,
 }
 
-/// `x - q` if that is non-negative, else `x`. Branchless: `2q < 2^31` means the
-/// difference's sign bit is a valid predicate, so this is a shift and a mask
-/// rather than an unpredictable conditional jump.
+/// Maps `x` in `[0, 2q)` to `[0, q)`: `x - q` if that is non-negative, else
+/// `x`. Branchless: `2q < 2^31` means the difference's sign bit is a valid
+/// predicate, so this is a shift and a mask rather than an unpredictable
+/// conditional jump.
 #[inline(always)]
 fn csub(x: u32, q: u32) -> u32 {
     let d = x.wrapping_sub(q);
@@ -63,7 +72,7 @@ pub fn mont_mul<const N: usize>(a: u32, b: u32, ring: &Ring32<N>) -> u32 {
     mont_reduce(a as u64 * b as u64, ring)
 }
 
-/// Canonical modular product `a·b mod q` for canonical inputs.
+/// Modular product `a·b mod q`, not in Montgomery form, for canonical inputs.
 #[inline(always)]
 pub fn mul_mod<const N: usize>(a: u32, b: u32, ring: &Ring32<N>) -> u32 {
     mont_mul(mont_mul(a, b, ring), ring.r2, ring)
@@ -610,7 +619,7 @@ pub(in crate::poly) mod avx2 {
         }
     }
 
-    /// Canonical `lhs[i]·rhs[i] mod q`: two Montgomery rounds, the second
+    /// `lhs[i]·rhs[i] mod q` via two Montgomery rounds, the second
     /// against `r2` to leave the Montgomery domain.
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn pointwise_mul_avx2<const N: usize>(
