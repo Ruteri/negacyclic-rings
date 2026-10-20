@@ -545,8 +545,8 @@ mod avx2 {
         let m = mullo64(lo, qinv_v);
         let mhi = umulhi64(m, q_v);
         // (x + m·q) >> 64 = hi + mhi + (lo != 0): low words cancel exactly.
-        let lo_nz = _mm256_cmpeq_epi64(lo, _mm256_setzero_si256());
-        let carry = _mm256_add_epi64(_mm256_set1_epi64x(1), lo_nz); // 1 if lo≠0 else 0
+        let lo_is_zero = _mm256_cmpeq_epi64(lo, _mm256_setzero_si256());
+        let carry = _mm256_add_epi64(_mm256_set1_epi64x(1), lo_is_zero); // 1 if lo≠0 else 0
         let t = _mm256_add_epi64(_mm256_add_epi64(hi, mhi), carry);
         csub(t, q_v)
     }
