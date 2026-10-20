@@ -279,6 +279,8 @@ mod avx2 {
     use super::Ring64;
     use std::arch::x86_64::*;
 
+    const LANES: usize = 4;
+
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn ntt_avx2<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
         let q_v = _mm256_set1_epi64x(ring.q as i64);
@@ -303,14 +305,14 @@ mod avx2 {
                         coefficients.as_mut_ptr().add(j + ht) as *mut __m256i,
                         new_v,
                     );
-                    j += 4;
+                    j += LANES;
                 }
                 i += 1;
                 j1 += t;
             }
             t = ht;
         }
-        debug_assert_eq!(t, 4);
+        debug_assert_eq!(t, LANES);
         ntt_tail(ring, coefficients, q_v);
     }
 
@@ -393,8 +395,8 @@ mod avx2 {
         q_v: __m256i,
     ) {
         let (ma, mb) = (N / 4, N / 2);
-        for g in 0..(N / 4) {
-            let ptr = coefficients.as_mut_ptr().add(g * 4) as *mut __m256i;
+        for g in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
             // ht = 2: one twiddle, halves swapped across the 128-bit lanes.
@@ -431,7 +433,7 @@ mod avx2 {
     ) {
         let q_v = _mm256_set1_epi64x(ring.q as i64);
         inv_ntt_tail(ring, coefficients, q_v);
-        let (mut t, mut m) = (4usize, N / 4);
+        let (mut t, mut m) = (LANES, N / LANES);
         while m > 1 {
             let hm = m >> 1;
             let dt = t << 1;
@@ -452,7 +454,7 @@ mod avx2 {
                         coefficients.as_mut_ptr().add(j + t) as *mut __m256i,
                         new_v,
                     );
-                    j += 4;
+                    j += LANES;
                 }
                 i += 1;
                 j1 += dt;
@@ -462,8 +464,8 @@ mod avx2 {
         }
         let n_inv_v = _mm256_set1_epi64x(ring.n_inv as i64);
         let n_inv_s_v = _mm256_set1_epi64x(ring.n_inv_shoup as i64);
-        for chunk in 0..(N / 4) {
-            let ptr = coefficients.as_mut_ptr().add(chunk * 4) as *mut __m256i;
+        for chunk in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(chunk * LANES) as *mut __m256i;
             let v = _mm256_loadu_si256(ptr as *const __m256i);
             _mm256_storeu_si256(ptr, shoup_mul_v(v, n_inv_v, n_inv_s_v, q_v));
         }
@@ -478,8 +480,8 @@ mod avx2 {
         q_v: __m256i,
     ) {
         let (ma, mb) = (N / 2, N / 4);
-        for g in 0..(N / 4) {
-            let ptr = coefficients.as_mut_ptr().add(g * 4) as *mut __m256i;
+        for g in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
             // t = 1
@@ -515,8 +517,8 @@ mod avx2 {
         let q_v = _mm256_set1_epi64x(ring.q as i64);
         let qinv_v = _mm256_set1_epi64x(ring.q_inv_neg as i64);
         let r2_v = _mm256_set1_epi64x(ring.r2 as i64);
-        for chunk in 0..(N / 4) {
-            let off = chunk * 4;
+        for chunk in 0..(N / LANES) {
+            let off = chunk * LANES;
             let acc_ptr = acc.as_mut_ptr().add(off) as *mut __m256i;
             // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-64 mod q.
             let mut mont_acc = _mm256_setzero_si256();
