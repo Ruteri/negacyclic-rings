@@ -114,6 +114,7 @@ pub fn add_mod(a: u64, b: u64, q: u64) -> u64 {
     csub(a + b, q)
 }
 
+/// `(a - b) mod q` for canonical `a, b` in `[0, q)`.
 #[inline(always)]
 pub fn sub_mod(a: u64, b: u64, q: u64) -> u64 {
     let d = a.wrapping_sub(b);
