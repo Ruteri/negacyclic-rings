@@ -108,6 +108,7 @@ fn csub(x: u64, q: u64) -> u64 {
     d.wrapping_add(q & (((d as i64) >> 63) as u64))
 }
 
+/// `(a + b) mod q` for canonical `a, b` in `[0, q)`.
 #[inline(always)]
 pub fn add_mod(a: u64, b: u64, q: u64) -> u64 {
     csub(a + b, q)
