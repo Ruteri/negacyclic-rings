@@ -448,8 +448,8 @@ mod avx2 {
                     let u = _mm256_loadu_si256(coefficients.as_ptr().add(j) as *const __m256i);
                     let v = _mm256_loadu_si256(coefficients.as_ptr().add(j + t) as *const __m256i);
                     let new_u = add_mod_v(u, v, q_v);
-                    let d = sub_mod_v(u, v, q_v);
-                    let new_v = shoup_mul_v(d, w_v, ws_v, q_v);
+                    let difference = sub_mod_v(u, v, q_v);
+                    let new_v = shoup_mul_v(difference, w_v, ws_v, q_v);
                     _mm256_storeu_si256(coefficients.as_mut_ptr().add(j) as *mut __m256i, new_u);
                     _mm256_storeu_si256(
                         coefficients.as_mut_ptr().add(j + t) as *mut __m256i,
