@@ -135,7 +135,9 @@ pub fn inv_ntt<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
 }
 
 fn inv_ntt_scalar<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
-    inv_ntt_stages_scalar(ring, coefficients, N.trailing_zeros() as usize, 1, N);
+    let stages = N.trailing_zeros() as usize;
+    let distance = 1;
+    inv_ntt_stages_scalar(ring, coefficients, stages, distance, N / distance);
     inv_ntt_final_scale_scalar(ring, coefficients);
 }
 
