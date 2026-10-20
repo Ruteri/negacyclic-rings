@@ -187,8 +187,10 @@ fn inv_ntt_final_scale_scalar<const N: usize>(ring: &Ring64<N>, coefficients: &m
     }
 }
 
-/// Scalar on purpose: x86-64 has no 64x64->128 vector multiply, so the AVX2
-/// Montgomery emulation loses to a scalar `mulx` here (measured 2.2x slower).
+/// Pointwise product `lhs[i]·rhs[i] mod q` of two canonical NTT-domain
+/// polynomials; apply `inv_ntt` to the result to get their negacyclic product.
+// Scalar because x86-64 has no 64x64->128 vector multiply, so the AVX2
+// Montgomery emulation is 2.2x slower than a scalar `mulx`.
 #[inline]
 pub fn pointwise_mul<const N: usize>(ring: &Ring64<N>, lhs: &[u64; N], rhs: &[u64; N]) -> [u64; N] {
     core::array::from_fn(|i| mul_mod(lhs[i], rhs[i], ring))
