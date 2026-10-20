@@ -253,6 +253,8 @@ fn pointwise_mac_scalar<const N: usize>(
     }
 }
 
+/// `lhs[i] = (lhs[i] + rhs[i]) mod q` for canonical inputs, in place; valid in
+/// either the coefficient or the NTT domain.
 #[inline]
 pub fn add_assign<const N: usize>(ring: &Ring64<N>, lhs: &mut [u64; N], rhs: &[u64; N]) {
     for (x, &y) in lhs.iter_mut().zip(rhs) {
