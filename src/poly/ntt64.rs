@@ -365,9 +365,9 @@ mod avx2 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn csub(v: __m256i, q_v: __m256i) -> __m256i {
-        let d = _mm256_sub_epi64(v, q_v);
-        let lt = _mm256_cmpgt_epi64(_mm256_setzero_si256(), d);
-        _mm256_blendv_epi8(d, v, lt)
+        let difference = _mm256_sub_epi64(v, q_v);
+        let negative = _mm256_cmpgt_epi64(_mm256_setzero_si256(), difference);
+        _mm256_blendv_epi8(difference, v, negative)
     }
 
     /// `(a + b) mod q`, canonical inputs.
