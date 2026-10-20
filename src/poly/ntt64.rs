@@ -216,7 +216,8 @@ pub fn mont_reduce<const N: usize>(x: u128, ring: &Ring64<N>) -> u64 {
     csub(t, ring.q)
 }
 
-/// `acc[i] += Σ_k a[k][i]·b[k][i] (mod q)` for canonical inputs.
+/// `acc[i] += Σ_k a[k][i]·b[k][i] (mod q)` for canonical NTT-domain inputs;
+/// apply `inv_ntt` to `acc` to get the sum of the negacyclic products.
 pub fn pointwise_mac<const N: usize>(
     ring: &Ring64<N>,
     acc: &mut [u64; N],
