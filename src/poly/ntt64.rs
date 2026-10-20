@@ -104,8 +104,8 @@ fn shoup_mul(a: u64, w: u64, w_shoup: u64, q: u64) -> u64 {
 /// conditional jump.
 #[inline(always)]
 fn csub(x: u64, q: u64) -> u64 {
-    let d = x.wrapping_sub(q);
-    d.wrapping_add(q & (((d as i64) >> 63) as u64))
+    let difference = x.wrapping_sub(q);
+    difference.wrapping_add(q & (((difference as i64) >> 63) as u64))
 }
 
 /// `(a + b) mod q` for canonical `a, b` in `[0, q)`.
@@ -117,8 +117,8 @@ pub fn add_mod(a: u64, b: u64, q: u64) -> u64 {
 /// `(a - b) mod q` for canonical `a, b` in `[0, q)`.
 #[inline(always)]
 pub fn sub_mod(a: u64, b: u64, q: u64) -> u64 {
-    let d = a.wrapping_sub(b);
-    d.wrapping_add(q & (((d as i64) >> 63) as u64))
+    let difference = a.wrapping_sub(b);
+    difference.wrapping_add(q & (((difference as i64) >> 63) as u64))
 }
 
 /// Inverse NTT over canonical `[0, q)` values, in place (includes the final
