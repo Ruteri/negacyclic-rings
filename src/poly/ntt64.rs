@@ -316,7 +316,7 @@ mod avx2 {
         ntt_tail(ring, coefficients, q_v);
     }
 
-    /// Shoup multiply by a broadcast twiddle: `a·w mod q`, canonical output.
+    /// Shoup multiply by a broadcast constant: `a·w mod q`, canonical output.
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn shoup_mul_v(a: __m256i, w_v: __m256i, ws_v: __m256i, q_v: __m256i) -> __m256i {
