@@ -519,13 +519,13 @@ mod avx2 {
         let qinv_v = _mm256_set1_epi64x(ring.q_inv_neg as i64);
         let r2_v = _mm256_set1_epi64x(ring.r2 as i64);
         for chunk in 0..(N / LANES) {
-            let off = chunk * LANES;
-            let acc_ptr = acc.as_mut_ptr().add(off) as *mut __m256i;
+            let offset = chunk * LANES;
+            let acc_ptr = acc.as_mut_ptr().add(offset) as *mut __m256i;
             // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-64 mod q.
             let mut mont_acc = _mm256_setzero_si256();
             for k in 0..a.len() {
-                let av = _mm256_loadu_si256(a[k].as_ptr().add(off) as *const __m256i);
-                let bv = _mm256_loadu_si256(b[k].as_ptr().add(off) as *const __m256i);
+                let av = _mm256_loadu_si256(a[k].as_ptr().add(offset) as *const __m256i);
+                let bv = _mm256_loadu_si256(b[k].as_ptr().add(offset) as *const __m256i);
                 let prod = mont_mul_v(av, bv, q_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
