@@ -13,95 +13,56 @@
 //! Requirements on the modulus: q odd prime, q < 2^62, q ≡ 1 (mod 2N).
 
 pub struct Ring64<const N: usize> {
+    /// The prime modulus: `q = 1 mod 2N`, `q < 2^62`.
     pub q: u64,
-    /// `-(q^-1) mod 2^64`.
+    /// `-(q^-1) mod 2^64`, for Montgomery reduction.
     pub q_inv_neg: u64,
-    /// `2^128 mod q` (Montgomery conversion factor).
+    /// `2^128 mod q`; a Montgomery product with it leaves the Montgomery domain.
     pub r2: u64,
+    /// `psi^bitrev(i)`, the forward twiddles (Longa–Naehrig's `Psi_rev`).
+    /// Entry 0 is unused.
     pub ntt_table: [u64; N],
+    /// `floor(ntt_table[i]·2^64/q)`, Harvey's Shoup companion for each twiddle.
     pub ntt_table_shoup: [u64; N],
+    /// `psi^-bitrev(i)`, the inverse twiddles (Longa–Naehrig's `Psi_rev^-1`).
+    /// Entry 0 is unused.
     pub inv_ntt_table: [u64; N],
+    /// `floor(inv_ntt_table[i]·2^64/q)`, the Shoup companion for each inverse twiddle.
     pub inv_ntt_table_shoup: [u64; N],
+    /// `N^-1 mod q`, the final scale of the inverse NTT.
     pub n_inv: u64,
+    /// `floor(n_inv·2^64/q)`, its Shoup companion.
     pub n_inv_shoup: u64,
 }
 
-/// `x - q` if that is non-negative, else `x`. Branchless: `q < 2^62` means the
-/// difference's sign bit is a valid predicate, so this is a shift and a mask
-/// rather than an unpredictable conditional jump.
-#[inline(always)]
-fn csub_s(x: u64, q: u64) -> u64 {
-    let d = x.wrapping_sub(q);
-    d.wrapping_add(q & (((d as i64) >> 63) as u64))
-}
-
-#[inline(always)]
-pub fn add_mod(a: u64, b: u64, q: u64) -> u64 {
-    csub_s(a + b, q)
-}
-
-#[inline(always)]
-pub fn sub_mod(a: u64, b: u64, q: u64) -> u64 {
-    let d = a.wrapping_sub(b);
-    d.wrapping_add(q & (((d as i64) >> 63) as u64))
-}
-
-#[inline(always)]
-fn shoup_mul(a: u64, w: u64, w_shoup: u64, q: u64) -> u64 {
-    let qq = ((a as u128 * w_shoup as u128) >> 64) as u64;
-    csub_s(a.wrapping_mul(w).wrapping_sub(qq.wrapping_mul(q)), q)
-}
-
-/// Montgomery reduction: `x < q·2^64` → `x·2^-64 mod q`, canonical.
-#[inline(always)]
-pub fn mont_reduce<const N: usize>(x: u128, ring: &Ring64<N>) -> u64 {
-    let m = (x as u64).wrapping_mul(ring.q_inv_neg);
-    let t = ((x + m as u128 * ring.q as u128) >> 64) as u64;
-    csub_s(t, ring.q)
-}
-
-/// `a·b·2^-64 mod q` (Montgomery-domain product).
-#[inline(always)]
-pub fn mont_mul<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
-    mont_reduce(a as u128 * b as u128, ring)
-}
-
-/// Canonical modular product `a·b mod q` for canonical inputs.
-#[inline(always)]
-pub fn mul_mod<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
-    mont_mul(mont_mul(a, b, ring), ring.r2, ring)
-}
-
-#[inline]
-pub fn add_assign<const N: usize>(ring: &Ring64<N>, lhs: &mut [u64; N], rhs: &[u64; N]) {
-    for (x, &y) in lhs.iter_mut().zip(rhs) {
-        *x = add_mod(*x, y, ring.q);
+/// Forward NTT over canonical `[0, q)` values, in place. The output is
+/// canonical and in bit-reversed order, which `inv_ntt` and the pointwise
+/// functions expect.
+pub fn ntt<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
+    assert!(N.is_power_of_two(), "NTT degree must be a power of two");
+    #[cfg(target_arch = "x86_64")]
+    if N >= 4 && avx2_available() {
+        unsafe { avx2::ntt_avx2(ring, coefficients) };
+        return;
     }
+    ntt_scalar(ring, coefficients);
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline]
-pub fn sub_assign<const N: usize>(ring: &Ring64<N>, lhs: &mut [u64; N], rhs: &[u64; N]) {
-    for (x, &y) in lhs.iter_mut().zip(rhs) {
-        *x = sub_mod(*x, y, ring.q);
-    }
+fn avx2_available() -> bool {
+    std::is_x86_feature_detected!("avx2")
 }
 
-/// Scalar on purpose: x86-64 has no 64x64->128 vector multiply, so the AVX2
-/// Montgomery emulation loses to a scalar `mulx` here (measured 2.2x slower).
-#[inline]
-pub fn pointwise_mul<const N: usize>(ring: &Ring64<N>, lhs: &[u64; N], rhs: &[u64; N]) -> [u64; N] {
-    core::array::from_fn(|i| mul_mod(lhs[i], rhs[i], ring))
+fn ntt_scalar<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
+    ntt_stages_scalar(ring, coefficients, 0, N);
 }
-
-// ---------------------------------------------------------------
-// Scalar NTT.
-// ---------------------------------------------------------------
 
 /// Forward butterfly stages starting at `start_l` with `t = N >> start_l`.
 /// Inputs canonical `[0, q)`.
 fn ntt_stages_scalar<const N: usize>(
     ring: &Ring64<N>,
-    p: &mut [u64; N],
+    coefficients: &mut [u64; N],
     start_l: usize,
     mut t: usize,
 ) {
@@ -117,10 +78,10 @@ fn ntt_stages_scalar<const N: usize>(
             let j2 = j1 + ht;
             let mut j = j1;
             while j < j2 {
-                let u = p[j];
-                let v = shoup_mul(p[j + ht], w, ws, q);
-                p[j] = add_mod(u, v, q);
-                p[j + ht] = sub_mod(u, v, q);
+                let u = coefficients[j];
+                let v = shoup_mul(coefficients[j + ht], w, ws, q);
+                coefficients[j] = add_mod(u, v, q);
+                coefficients[j + ht] = sub_mod(u, v, q);
                 j += 1;
             }
             i += 1;
@@ -130,11 +91,62 @@ fn ntt_stages_scalar<const N: usize>(
     }
 }
 
+#[inline(always)]
+fn shoup_mul(a: u64, w: u64, w_shoup: u64, q: u64) -> u64 {
+    // Estimated quotient: may be one less than floor(a·w / q), never more.
+    let quotient = ((a as u128 * w_shoup as u128) >> 64) as u64;
+    csub(a.wrapping_mul(w).wrapping_sub(quotient.wrapping_mul(q)), q)
+}
+
+/// Maps `x` in `[0, 2q)` to `[0, q)`: `x - q` if that is non-negative, else
+/// `x`. Branchless: `q < 2^62` means the difference's sign bit is a valid
+/// predicate, so this is a shift and a mask rather than an unpredictable
+/// conditional jump.
+#[inline(always)]
+fn csub(x: u64, q: u64) -> u64 {
+    let difference = x.wrapping_sub(q);
+    difference.wrapping_add(q & (((difference as i64) >> 63) as u64))
+}
+
+/// `(a + b) mod q` for canonical `a, b` in `[0, q)`.
+#[inline(always)]
+pub fn add_mod(a: u64, b: u64, q: u64) -> u64 {
+    csub(a + b, q)
+}
+
+/// `(a - b) mod q` for canonical `a, b` in `[0, q)`.
+#[inline(always)]
+pub fn sub_mod(a: u64, b: u64, q: u64) -> u64 {
+    let difference = a.wrapping_sub(b);
+    difference.wrapping_add(q & (((difference as i64) >> 63) as u64))
+}
+
+/// Inverse NTT over canonical `[0, q)` values, in place (includes the final
+/// `N^-1` scaling). The input must be in bit-reversed order, as `ntt` and the
+/// pointwise functions produce; the output is in standard order.
+pub fn inv_ntt<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
+    assert!(N.is_power_of_two(), "NTT degree must be a power of two");
+    #[cfg(target_arch = "x86_64")]
+    if N >= 4 && avx2_available() {
+        unsafe { avx2::inv_ntt_avx2(ring, coefficients) };
+        return;
+    }
+    inv_ntt_scalar(ring, coefficients);
+}
+
+fn inv_ntt_scalar<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
+    // trailing_zeros returns log2(N), since N is a power of two.
+    let stages = N.trailing_zeros() as usize;
+    let distance = 1;
+    inv_ntt_stages_scalar(ring, coefficients, stages, distance, N / distance);
+    inv_ntt_final_scale_scalar(ring, coefficients);
+}
+
 /// Inverse butterfly stages, `iters` iterations from `(t, m)`. Returns the
 /// updated `(t, m)` for resumption. Inputs canonical `[0, q)`.
 fn inv_ntt_stages_scalar<const N: usize>(
     ring: &Ring64<N>,
-    p: &mut [u64; N],
+    coefficients: &mut [u64; N],
     iters: usize,
     mut t: usize,
     mut m: usize,
@@ -154,10 +166,10 @@ fn inv_ntt_stages_scalar<const N: usize>(
             let j2 = j1 + t;
             let mut j = j1;
             while j < j2 {
-                let u = p[j];
-                let v = p[j + t];
-                p[j] = add_mod(u, v, q);
-                p[j + t] = shoup_mul(sub_mod(u, v, q), w, ws, q);
+                let u = coefficients[j];
+                let v = coefficients[j + t];
+                coefficients[j] = add_mod(u, v, q);
+                coefficients[j + t] = shoup_mul(sub_mod(u, v, q), w, ws, q);
                 j += 1;
             }
             i += 1;
@@ -169,60 +181,60 @@ fn inv_ntt_stages_scalar<const N: usize>(
     (t, m)
 }
 
-fn inv_ntt_final_scale_scalar<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
-    for e in p.iter_mut() {
-        *e = shoup_mul(*e, ring.n_inv, ring.n_inv_shoup, ring.q);
+fn inv_ntt_final_scale_scalar<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
+    for coefficient in coefficients.iter_mut() {
+        *coefficient = shoup_mul(*coefficient, ring.n_inv, ring.n_inv_shoup, ring.q);
     }
 }
 
-fn ntt_scalar<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
-    ntt_stages_scalar(ring, p, 0, N);
-}
-
-fn inv_ntt_scalar<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
-    inv_ntt_stages_scalar(ring, p, N.trailing_zeros() as usize, 1, N);
-    inv_ntt_final_scale_scalar(ring, p);
-}
-
-// ---------------------------------------------------------------
-// Public entry points with AVX2 runtime dispatch.
-// ---------------------------------------------------------------
-
-#[cfg(target_arch = "x86_64")]
+/// Pointwise product `lhs[i]·rhs[i] mod q` of two canonical NTT-domain
+/// polynomials; apply `inv_ntt` to the result to get their negacyclic product.
+// Scalar because x86-64 has no 64x64->128 vector multiply, so the AVX2
+// Montgomery emulation is 2.2x slower than a scalar `mulx`.
 #[inline]
-fn avx2_available() -> bool {
-    std::is_x86_feature_detected!("avx2")
+pub fn pointwise_mul<const N: usize>(ring: &Ring64<N>, lhs: &[u64; N], rhs: &[u64; N]) -> [u64; N] {
+    core::array::from_fn(|i| mul_mod(lhs[i], rhs[i], ring))
 }
 
-/// Forward NTT over canonical `[0, q)` values, in place.
-pub fn ntt<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
-    assert!(N.is_power_of_two(), "NTT degree must be a power of two");
+/// Modular product `a·b mod q`, not in Montgomery form, for canonical inputs.
+#[inline(always)]
+pub fn mul_mod<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
+    mont_mul(mont_mul(a, b, ring), ring.r2, ring)
+}
+
+/// `a·b·2^-64 mod q` (Montgomery-domain product) for canonical inputs.
+#[inline(always)]
+pub fn mont_mul<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
+    mont_reduce(a as u128 * b as u128, ring)
+}
+
+/// Montgomery reduction: `x < q·2^64` → `x·2^-64 mod q`, canonical.
+#[inline(always)]
+pub fn mont_reduce<const N: usize>(x: u128, ring: &Ring64<N>) -> u64 {
+    let m = (x as u64).wrapping_mul(ring.q_inv_neg);
+    let t = ((x + m as u128 * ring.q as u128) >> 64) as u64;
+    csub(t, ring.q)
+}
+
+/// `acc[i] += Σ_k a[k][i]·b[k][i] (mod q)` for canonical NTT-domain inputs;
+/// apply `inv_ntt` to `acc` to get the sum of the negacyclic products.
+pub fn pointwise_mac<const N: usize>(
+    ring: &Ring64<N>,
+    acc: &mut [u64; N],
+    a: &[&[u64; N]],
+    b: &[&[u64; N]],
+) {
+    debug_assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "x86_64")]
     if N >= 4 && avx2_available() {
-        unsafe { avx2::ntt_avx2(ring, p) };
+        unsafe { avx2::pointwise_mac_avx2(ring, acc, a, b) };
         return;
     }
-    ntt_scalar(ring, p);
+    pointwise_mac_scalar(ring, acc, a, b);
 }
 
-/// Inverse NTT over canonical `[0, q)` values, in place (includes the final
-/// `N^-1` scaling).
-pub fn inv_ntt<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
-    assert!(N.is_power_of_two(), "NTT degree must be a power of two");
-    #[cfg(target_arch = "x86_64")]
-    if N >= 4 && avx2_available() {
-        unsafe { avx2::inv_ntt_avx2(ring, p) };
-        return;
-    }
-    inv_ntt_scalar(ring, p);
-}
-
-// ---------------------------------------------------------------
-// Pointwise multiply-accumulate (NTT-domain inner products).
-// Accumulates Montgomery-domain products, converting to canonical once per
-// coefficient at the end: mont(Σ mont(a·b) · r2) = Σ a·b.
-// ---------------------------------------------------------------
-
+// Accumulates Montgomery-domain products, converting out of Montgomery form
+// once per coefficient at the end: mont(Σ mont(a·b) · r2) = Σ a·b.
 fn pointwise_mac_scalar<const N: usize>(
     ring: &Ring64<N>,
     acc: &mut [u64; N],
@@ -241,32 +253,78 @@ fn pointwise_mac_scalar<const N: usize>(
     }
 }
 
-/// `acc[i] += Σ_k a[k][i]·b[k][i] (mod q)` for canonical inputs.
-pub fn pointwise_mac<const N: usize>(
-    ring: &Ring64<N>,
-    acc: &mut [u64; N],
-    a: &[&[u64; N]],
-    b: &[&[u64; N]],
-) {
-    debug_assert_eq!(a.len(), b.len());
-    #[cfg(target_arch = "x86_64")]
-    if N >= 4 && avx2_available() {
-        unsafe { avx2::pointwise_mac_avx2(ring, acc, a, b) };
-        return;
+/// `lhs[i] = (lhs[i] + rhs[i]) mod q` for canonical inputs, in place; valid in
+/// either the coefficient or the NTT domain.
+#[inline]
+pub fn add_assign<const N: usize>(ring: &Ring64<N>, lhs: &mut [u64; N], rhs: &[u64; N]) {
+    for (x, &y) in lhs.iter_mut().zip(rhs) {
+        *x = add_mod(*x, y, ring.q);
     }
-    pointwise_mac_scalar(ring, acc, a, b);
 }
 
-// ---------------------------------------------------------------
+/// `lhs[i] = (lhs[i] - rhs[i]) mod q` for canonical inputs, in place; valid in
+/// either the coefficient or the NTT domain.
+#[inline]
+pub fn sub_assign<const N: usize>(ring: &Ring64<N>, lhs: &mut [u64; N], rhs: &[u64; N]) {
+    for (x, &y) in lhs.iter_mut().zip(rhs) {
+        *x = sub_mod(*x, y, ring.q);
+    }
+}
+
 // AVX2 kernels (4 × u64 lanes). 64×64 products are decomposed into
 // `_mm256_mul_epu32` partial products; all values stay < 2^62 so signed
 // 64-bit lane compares are safe for conditional subtracts.
-// ---------------------------------------------------------------
-
 #[cfg(target_arch = "x86_64")]
 mod avx2 {
     use super::Ring64;
     use std::arch::x86_64::*;
+
+    const LANES: usize = 4;
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn ntt_avx2<const N: usize>(ring: &Ring64<N>, coefficients: &mut [u64; N]) {
+        let q_v = _mm256_set1_epi64x(ring.q as i64);
+        let mut t = N;
+        for l in 0..(N.trailing_zeros() as usize - 2) {
+            let m = 1usize << l;
+            let ht = t >> 1;
+            let mut i = 0usize;
+            let mut j1 = 0usize;
+            while i < m {
+                let w_v = _mm256_set1_epi64x(ring.ntt_table[m + i] as i64);
+                let ws_v = _mm256_set1_epi64x(ring.ntt_table_shoup[m + i] as i64);
+                let mut j = j1;
+                while j < j1 + ht {
+                    let u = _mm256_loadu_si256(coefficients.as_ptr().add(j) as *const __m256i);
+                    let v = _mm256_loadu_si256(coefficients.as_ptr().add(j + ht) as *const __m256i);
+                    let v_red = shoup_mul_v(v, w_v, ws_v, q_v);
+                    let new_u = add_mod_v(u, v_red, q_v);
+                    let new_v = sub_mod_v(u, v_red, q_v);
+                    _mm256_storeu_si256(coefficients.as_mut_ptr().add(j) as *mut __m256i, new_u);
+                    _mm256_storeu_si256(
+                        coefficients.as_mut_ptr().add(j + ht) as *mut __m256i,
+                        new_v,
+                    );
+                    j += LANES;
+                }
+                i += 1;
+                j1 += t;
+            }
+            t = ht;
+        }
+        debug_assert_eq!(t, LANES);
+        ntt_tail(ring, coefficients, q_v);
+    }
+
+    /// Shoup multiply by a broadcast constant: `a·w mod q`, canonical output.
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn shoup_mul_v(a: __m256i, w_v: __m256i, ws_v: __m256i, q_v: __m256i) -> __m256i {
+        // Estimated quotient: may be one less than floor(a·w / q), never more.
+        let quotient = umulhi64(a, ws_v);
+        let r = _mm256_sub_epi64(mullo64(a, w_v), mullo64(quotient, q_v));
+        csub(r, q_v)
+    }
 
     /// High 64 bits of the 128-bit product of two u64 vectors.
     #[inline]
@@ -307,18 +365,9 @@ mod avx2 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn csub(v: __m256i, q_v: __m256i) -> __m256i {
-        let d = _mm256_sub_epi64(v, q_v);
-        let lt = _mm256_cmpgt_epi64(_mm256_setzero_si256(), d);
-        _mm256_blendv_epi8(d, v, lt)
-    }
-
-    /// Shoup multiply by a broadcast twiddle: `a·w mod q`, canonical output.
-    #[inline]
-    #[target_feature(enable = "avx2")]
-    unsafe fn shoup_mul_v(a: __m256i, w_v: __m256i, ws_v: __m256i, q_v: __m256i) -> __m256i {
-        let qq = umulhi64(a, ws_v);
-        let r = _mm256_sub_epi64(mullo64(a, w_v), mullo64(qq, q_v));
-        csub(r, q_v)
+        let difference = _mm256_sub_epi64(v, q_v);
+        let negative = _mm256_cmpgt_epi64(_mm256_setzero_si256(), difference);
+        _mm256_blendv_epi8(difference, v, negative)
     }
 
     /// `(a + b) mod q`, canonical inputs.
@@ -332,42 +381,23 @@ mod avx2 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn sub_mod_v(a: __m256i, b: __m256i, q_v: __m256i) -> __m256i {
-        let d = _mm256_sub_epi64(a, b);
-        let neg = _mm256_cmpgt_epi64(_mm256_setzero_si256(), d);
-        _mm256_add_epi64(d, _mm256_and_si256(neg, q_v))
-    }
-
-    /// Montgomery product `a·b·2^-64 mod q`, canonical output in `[0, q)`.
-    #[inline]
-    #[target_feature(enable = "avx2")]
-    unsafe fn mont_mul_v(a: __m256i, b: __m256i, q_v: __m256i, qinv_v: __m256i) -> __m256i {
-        let lo = mullo64(a, b);
-        let hi = umulhi64(a, b);
-        let m = mullo64(lo, qinv_v);
-        let mhi = umulhi64(m, q_v);
-        // (x + m·q) >> 64 = hi + mhi + (lo != 0): low words cancel exactly.
-        let lo_nz = _mm256_cmpeq_epi64(lo, _mm256_setzero_si256());
-        let carry = _mm256_add_epi64(_mm256_set1_epi64x(1), lo_nz); // 1 if lo≠0 else 0
-        let t = _mm256_add_epi64(_mm256_add_epi64(hi, mhi), carry);
-        csub(t, q_v)
-    }
-
-    /// `w0` in lane 0 and `w1` in lane 2 — the unused lanes are zero, and a zero
-    /// twiddle with a zero Shoup companion yields zero.
-    #[inline]
-    #[target_feature(enable = "avx2")]
-    unsafe fn twiddle_pair(w0: u64, w1: u64) -> __m256i {
-        _mm256_set_epi64x(0, w1 as i64, 0, w0 as i64)
+        let difference = _mm256_sub_epi64(a, b);
+        let negative = _mm256_cmpgt_epi64(_mm256_setzero_si256(), difference);
+        _mm256_add_epi64(difference, _mm256_and_si256(negative, q_v))
     }
 
     /// Forward stages with `ht = 2, 1`. Both pair elements inside one aligned
     /// group of 4, so a group is loaded once and butterflied in-register.
     #[inline]
     #[target_feature(enable = "avx2")]
-    unsafe fn ntt_tail<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N], q_v: __m256i) {
+    unsafe fn ntt_tail<const N: usize>(
+        ring: &Ring64<N>,
+        coefficients: &mut [u64; N],
+        q_v: __m256i,
+    ) {
         let (ma, mb) = (N / 4, N / 2);
-        for g in 0..(N / 4) {
-            let ptr = p.as_mut_ptr().add(g * 4) as *mut __m256i;
+        for g in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
             // ht = 2: one twiddle, halves swapped across the 128-bit lanes.
@@ -389,75 +419,22 @@ mod avx2 {
         }
     }
 
-    /// Inverse stages with `t = 1, 2`, mirroring [`ntt_tail`].
+    /// `w0` in lane 0 and `w1` in lane 2 — the unused lanes are zero, and a zero
+    /// twiddle with a zero Shoup companion yields zero.
     #[inline]
     #[target_feature(enable = "avx2")]
-    unsafe fn inv_ntt_tail<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N], q_v: __m256i) {
-        let (ma, mb) = (N / 2, N / 4);
-        for g in 0..(N / 4) {
-            let ptr = p.as_mut_ptr().add(g * 4) as *mut __m256i;
-            let mut x = _mm256_loadu_si256(ptr as *const __m256i);
-
-            // t = 1
-            let (i0, i1) = (ma + 2 * g, ma + 2 * g + 1);
-            let w = twiddle_pair(ring.inv_ntt_table[i0], ring.inv_ntt_table[i1]);
-            let ws = twiddle_pair(ring.inv_ntt_table_shoup[i0], ring.inv_ntt_table_shoup[i1]);
-            let u = _mm256_unpacklo_epi64(x, x);
-            let v = _mm256_unpackhi_epi64(x, x);
-            let s = add_mod_v(u, v, q_v);
-            let d = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
-            x = _mm256_unpacklo_epi64(s, d);
-
-            // t = 2
-            let w = _mm256_set1_epi64x(ring.inv_ntt_table[mb + g] as i64);
-            let ws = _mm256_set1_epi64x(ring.inv_ntt_table_shoup[mb + g] as i64);
-            let u = _mm256_permute2x128_si256::<0x00>(x, x);
-            let v = _mm256_permute2x128_si256::<0x11>(x, x);
-            let s = add_mod_v(u, v, q_v);
-            let d = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
-            x = _mm256_permute2x128_si256::<0x20>(s, d);
-
-            _mm256_storeu_si256(ptr, x);
-        }
+    unsafe fn twiddle_pair(w0: u64, w1: u64) -> __m256i {
+        _mm256_set_epi64x(0, w1 as i64, 0, w0 as i64)
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn ntt_avx2<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
+    pub(super) unsafe fn inv_ntt_avx2<const N: usize>(
+        ring: &Ring64<N>,
+        coefficients: &mut [u64; N],
+    ) {
         let q_v = _mm256_set1_epi64x(ring.q as i64);
-        let mut t = N;
-        for l in 0..(N.trailing_zeros() as usize - 2) {
-            let m = 1usize << l;
-            let ht = t >> 1;
-            let mut i = 0usize;
-            let mut j1 = 0usize;
-            while i < m {
-                let w_v = _mm256_set1_epi64x(ring.ntt_table[m + i] as i64);
-                let ws_v = _mm256_set1_epi64x(ring.ntt_table_shoup[m + i] as i64);
-                let mut j = j1;
-                while j < j1 + ht {
-                    let u = _mm256_loadu_si256(p.as_ptr().add(j) as *const __m256i);
-                    let v = _mm256_loadu_si256(p.as_ptr().add(j + ht) as *const __m256i);
-                    let v_red = shoup_mul_v(v, w_v, ws_v, q_v);
-                    let new_u = add_mod_v(u, v_red, q_v);
-                    let new_v = sub_mod_v(u, v_red, q_v);
-                    _mm256_storeu_si256(p.as_mut_ptr().add(j) as *mut __m256i, new_u);
-                    _mm256_storeu_si256(p.as_mut_ptr().add(j + ht) as *mut __m256i, new_v);
-                    j += 4;
-                }
-                i += 1;
-                j1 += t;
-            }
-            t = ht;
-        }
-        debug_assert_eq!(t, 4);
-        ntt_tail(ring, p, q_v);
-    }
-
-    #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn inv_ntt_avx2<const N: usize>(ring: &Ring64<N>, p: &mut [u64; N]) {
-        let q_v = _mm256_set1_epi64x(ring.q as i64);
-        inv_ntt_tail(ring, p, q_v);
-        let (mut t, mut m) = (4usize, N / 4);
+        inv_ntt_tail(ring, coefficients, q_v);
+        let (mut t, mut m) = (LANES, N / LANES);
         while m > 1 {
             let hm = m >> 1;
             let dt = t << 1;
@@ -468,14 +445,17 @@ mod avx2 {
                 let ws_v = _mm256_set1_epi64x(ring.inv_ntt_table_shoup[hm + i] as i64);
                 let mut j = j1;
                 while j < j1 + t {
-                    let u = _mm256_loadu_si256(p.as_ptr().add(j) as *const __m256i);
-                    let v = _mm256_loadu_si256(p.as_ptr().add(j + t) as *const __m256i);
+                    let u = _mm256_loadu_si256(coefficients.as_ptr().add(j) as *const __m256i);
+                    let v = _mm256_loadu_si256(coefficients.as_ptr().add(j + t) as *const __m256i);
                     let new_u = add_mod_v(u, v, q_v);
-                    let d = sub_mod_v(u, v, q_v);
-                    let new_v = shoup_mul_v(d, w_v, ws_v, q_v);
-                    _mm256_storeu_si256(p.as_mut_ptr().add(j) as *mut __m256i, new_u);
-                    _mm256_storeu_si256(p.as_mut_ptr().add(j + t) as *mut __m256i, new_v);
-                    j += 4;
+                    let difference = sub_mod_v(u, v, q_v);
+                    let new_v = shoup_mul_v(difference, w_v, ws_v, q_v);
+                    _mm256_storeu_si256(coefficients.as_mut_ptr().add(j) as *mut __m256i, new_u);
+                    _mm256_storeu_si256(
+                        coefficients.as_mut_ptr().add(j + t) as *mut __m256i,
+                        new_v,
+                    );
+                    j += LANES;
                 }
                 i += 1;
                 j1 += dt;
@@ -485,10 +465,46 @@ mod avx2 {
         }
         let n_inv_v = _mm256_set1_epi64x(ring.n_inv as i64);
         let n_inv_s_v = _mm256_set1_epi64x(ring.n_inv_shoup as i64);
-        for chunk in 0..(N / 4) {
-            let ptr = p.as_mut_ptr().add(chunk * 4) as *mut __m256i;
+        for chunk in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(chunk * LANES) as *mut __m256i;
             let v = _mm256_loadu_si256(ptr as *const __m256i);
             _mm256_storeu_si256(ptr, shoup_mul_v(v, n_inv_v, n_inv_s_v, q_v));
+        }
+    }
+
+    /// Inverse stages with `t = 1, 2`, mirroring [`ntt_tail`].
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn inv_ntt_tail<const N: usize>(
+        ring: &Ring64<N>,
+        coefficients: &mut [u64; N],
+        q_v: __m256i,
+    ) {
+        let (ma, mb) = (N / 2, N / 4);
+        for g in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
+            let mut x = _mm256_loadu_si256(ptr as *const __m256i);
+
+            // t = 1
+            let (i0, i1) = (ma + 2 * g, ma + 2 * g + 1);
+            let w = twiddle_pair(ring.inv_ntt_table[i0], ring.inv_ntt_table[i1]);
+            let ws = twiddle_pair(ring.inv_ntt_table_shoup[i0], ring.inv_ntt_table_shoup[i1]);
+            let u = _mm256_unpacklo_epi64(x, x);
+            let v = _mm256_unpackhi_epi64(x, x);
+            let new_u = add_mod_v(u, v, q_v);
+            let new_v = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
+            x = _mm256_unpacklo_epi64(new_u, new_v);
+
+            // t = 2
+            let w = _mm256_set1_epi64x(ring.inv_ntt_table[mb + g] as i64);
+            let ws = _mm256_set1_epi64x(ring.inv_ntt_table_shoup[mb + g] as i64);
+            let u = _mm256_permute2x128_si256::<0x00>(x, x);
+            let v = _mm256_permute2x128_si256::<0x11>(x, x);
+            let new_u = add_mod_v(u, v, q_v);
+            let new_v = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
+            x = _mm256_permute2x128_si256::<0x20>(new_u, new_v);
+
+            _mm256_storeu_si256(ptr, x);
         }
     }
 
@@ -502,21 +518,36 @@ mod avx2 {
         let q_v = _mm256_set1_epi64x(ring.q as i64);
         let qinv_v = _mm256_set1_epi64x(ring.q_inv_neg as i64);
         let r2_v = _mm256_set1_epi64x(ring.r2 as i64);
-        for chunk in 0..(N / 4) {
-            let off = chunk * 4;
-            let acc_ptr = acc.as_mut_ptr().add(off) as *mut __m256i;
+        for chunk in 0..(N / LANES) {
+            let offset = chunk * LANES;
+            let acc_ptr = acc.as_mut_ptr().add(offset) as *mut __m256i;
             // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-64 mod q.
             let mut mont_acc = _mm256_setzero_si256();
             for k in 0..a.len() {
-                let av = _mm256_loadu_si256(a[k].as_ptr().add(off) as *const __m256i);
-                let bv = _mm256_loadu_si256(b[k].as_ptr().add(off) as *const __m256i);
+                let av = _mm256_loadu_si256(a[k].as_ptr().add(offset) as *const __m256i);
+                let bv = _mm256_loadu_si256(b[k].as_ptr().add(offset) as *const __m256i);
                 let prod = mont_mul_v(av, bv, q_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
-            // One conversion to canonical per chunk: mont(Σ · r2) = Σ.
+            // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
             let canon = mont_mul_v(mont_acc, r2_v, q_v, qinv_v);
             let acc_v = _mm256_loadu_si256(acc_ptr as *const __m256i);
             _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, canon, q_v));
         }
+    }
+
+    /// Montgomery product `a·b·2^-64 mod q` for canonical inputs, canonical output in `[0, q)`.
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn mont_mul_v(a: __m256i, b: __m256i, q_v: __m256i, qinv_v: __m256i) -> __m256i {
+        let lo = mullo64(a, b);
+        let hi = umulhi64(a, b);
+        let m = mullo64(lo, qinv_v);
+        let mhi = umulhi64(m, q_v);
+        // (x + m·q) >> 64 = hi + mhi + (lo != 0): low words cancel exactly.
+        let lo_is_zero = _mm256_cmpeq_epi64(lo, _mm256_setzero_si256());
+        let carry = _mm256_add_epi64(_mm256_set1_epi64x(1), lo_is_zero); // 1 if lo≠0 else 0
+        let t = _mm256_add_epi64(_mm256_add_epi64(hi, mhi), carry);
+        csub(t, q_v)
     }
 }
