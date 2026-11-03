@@ -406,14 +406,14 @@ pub(in crate::poly) mod avx2 {
     #[target_feature(enable = "avx2")]
     unsafe fn mulhi32(a: __m256i, b: __m256i) -> __m256i {
         let mask = lo_mask();
-        let pe = _mm256_srli_epi64(
+        let even = _mm256_srli_epi64(
             _mm256_mul_epu32(_mm256_and_si256(a, mask), _mm256_and_si256(b, mask)),
             32,
         );
-        let po = _mm256_mul_epu32(_mm256_srli_epi64(a, 32), _mm256_srli_epi64(b, 32));
-        // pe holds the even-lane high words; po's high half already sits in the
-        // odd lane position.
-        _mm256_or_si256(pe, _mm256_andnot_si256(mask, po))
+        let odd = _mm256_mul_epu32(_mm256_srli_epi64(a, 32), _mm256_srli_epi64(b, 32));
+        // `even` holds the even-lane high words; `odd`'s high half already sits
+        // in the odd lane position.
+        _mm256_or_si256(even, _mm256_andnot_si256(mask, odd))
     }
 
     #[inline]
