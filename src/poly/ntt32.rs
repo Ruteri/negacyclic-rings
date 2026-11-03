@@ -501,6 +501,8 @@ pub(in crate::poly) mod avx2 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn twiddle_quads(w: &[u32]) -> __m256i {
+        // Reads exactly w[0..4]. A slice rather than &[u32; 4] keeps the callers,
+        // which pass 4-element table slices, free of conversions.
         _mm256_set_epi32(
             0,
             w[3] as i32,
