@@ -385,7 +385,7 @@ pub(in crate::poly) mod avx2 {
             }
             t = ht;
         }
-        debug_assert_eq!(t, 8);
+        debug_assert_eq!(t, LANES);
         ntt_tail(ring, coefficients, q_v);
     }
 
@@ -455,8 +455,8 @@ pub(in crate::poly) mod avx2 {
         q_v: __m256i,
     ) {
         let (ma, mb, mc) = (N / 8, N / 4, N / 2);
-        for g in 0..(N / 8) {
-            let ptr = coefficients.as_mut_ptr().add(g * 8) as *mut __m256i;
+        for g in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
             // ht = 4: one twiddle, halves swapped across the 128-bit lanes.
@@ -519,7 +519,7 @@ pub(in crate::poly) mod avx2 {
     ) {
         let q_v = _mm256_set1_epi32(ring.q as i32);
         inv_ntt_tail(ring, coefficients, q_v);
-        let (mut t, mut m) = (8usize, N / 8);
+        let (mut t, mut m) = (LANES, N / LANES);
         while m > 1 {
             let hm = m >> 1;
             let dt = t << 1;
@@ -566,8 +566,8 @@ pub(in crate::poly) mod avx2 {
         q_v: __m256i,
     ) {
         let (ma, mb, mc) = (N / 2, N / 4, N / 8);
-        for g in 0..(N / 8) {
-            let ptr = coefficients.as_mut_ptr().add(g * 8) as *mut __m256i;
+        for g in 0..(N / LANES) {
+            let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
             // t = 1
