@@ -237,7 +237,8 @@ pub fn mont_reduce<const N: usize>(x: u64, ring: &Ring32<N>) -> u32 {
     csub(t, ring.q)
 }
 
-/// `out[i] = Σ_k a[k][i]·b[k][i] (mod q)` for canonical inputs.
+/// `out[i] = Σ_k a[k][i]·b[k][i] (mod q)` for canonical NTT-domain inputs;
+/// apply `inv_ntt` to the result to get the sum of the negacyclic products.
 pub fn pointwise_dot<const N: usize>(ring: &Ring32<N>, a: &[[u32; N]], b: &[[u32; N]]) -> [u32; N] {
     assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "x86_64")]
