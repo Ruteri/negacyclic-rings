@@ -145,6 +145,7 @@ pub fn inv_ntt<const N: usize>(ring: &Ring32<N>, coefficients: &mut [u32; N]) {
 }
 
 fn inv_ntt_scalar<const N: usize>(ring: &Ring32<N>, coefficients: &mut [u32; N]) {
+    // trailing_zeros returns log2(N), since N is a power of two.
     let stages = N.trailing_zeros() as usize;
     let distance = 1;
     inv_ntt_stages_scalar(ring, coefficients, stages, distance, N / distance);
