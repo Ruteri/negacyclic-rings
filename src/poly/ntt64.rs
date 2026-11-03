@@ -400,7 +400,7 @@ mod avx2 {
             let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
-            // ht = 2: one twiddle, halves swapped across the 128-bit lanes.
+            // ht = 2: one twiddle; each 128-bit half copied across the register.
             let w = _mm256_set1_epi64x(ring.ntt_table[ma + g] as i64);
             let ws = _mm256_set1_epi64x(ring.ntt_table_shoup[ma + g] as i64);
             let u = _mm256_permute2x128_si256::<0x00>(x, x);
