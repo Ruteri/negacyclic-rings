@@ -257,6 +257,8 @@ pub fn pointwise_dot<const N: usize>(ring: &Ring32<N>, a: &[[u32; N]], b: &[[u32
     pointwise_dot_scalar(ring, a, b)
 }
 
+// Accumulates Montgomery-domain products, converting out of Montgomery form
+// once per coefficient at the end: mont(Σ mont(a·b) · r2) = Σ a·b.
 fn pointwise_dot_scalar<const N: usize>(
     ring: &Ring32<N>,
     a: &[[u32; N]],
