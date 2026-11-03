@@ -335,6 +335,8 @@ pub fn add_assign<const N: usize>(ring: &Ring32<N>, lhs: &mut [u32; N], rhs: &[u
     }
 }
 
+/// `lhs[i] = (lhs[i] - rhs[i]) mod q` for canonical inputs, in place; valid in
+/// either the coefficient or the NTT domain.
 #[inline]
 pub fn sub_assign<const N: usize>(ring: &Ring32<N>, lhs: &mut [u32; N], rhs: &[u32; N]) {
     for (x, &y) in lhs.iter_mut().zip(rhs) {
