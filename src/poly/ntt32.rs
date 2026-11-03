@@ -127,7 +127,8 @@ pub fn sub_mod(a: u32, b: u32, q: u32) -> u32 {
 }
 
 /// Inverse NTT over canonical `[0, q)` values, in place (includes the final
-/// `N^-1` scaling).
+/// `N^-1` scaling). The input must be in bit-reversed order, as `ntt` and the
+/// pointwise functions produce; the output is in standard order.
 pub fn inv_ntt<const N: usize>(ring: &Ring32<N>, coefficients: &mut [u32; N]) {
     assert!(N.is_power_of_two(), "NTT degree must be a power of two");
     #[cfg(target_arch = "x86_64")]
