@@ -113,6 +113,7 @@ fn csub(x: u32, q: u32) -> u32 {
     difference.wrapping_add(q & (((difference as i32) >> 31) as u32))
 }
 
+/// `(a + b) mod q` for canonical `a, b` in `[0, q)`.
 #[inline(always)]
 pub fn add_mod(a: u32, b: u32, q: u32) -> u32 {
     csub(a + b, q)
