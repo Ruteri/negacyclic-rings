@@ -98,6 +98,7 @@ fn ntt_stages_scalar<const N: usize>(
 
 #[inline(always)]
 fn shoup_mul(a: u32, w: u32, w_shoup: u32, q: u32) -> u32 {
+    // Estimated quotient: may be one less than floor(a·w / q), never more.
     let quotient = ((a as u64 * w_shoup as u64) >> 32) as u32;
     csub(a.wrapping_mul(w).wrapping_sub(quotient.wrapping_mul(q)), q)
 }
