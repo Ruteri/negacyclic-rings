@@ -223,7 +223,7 @@ pub fn mul_mod<const N: usize>(a: u32, b: u32, ring: &Ring32<N>) -> u32 {
     mont_mul(mont_mul(a, b, ring), ring.r2, ring)
 }
 
-/// `a·b·2^-32 mod q` (Montgomery-domain product).
+/// `a·b·2^-32 mod q` (Montgomery-domain product) for canonical inputs.
 #[inline(always)]
 pub fn mont_mul<const N: usize>(a: u32, b: u32, ring: &Ring32<N>) -> u32 {
     mont_reduce(a as u64 * b as u64, ring)
