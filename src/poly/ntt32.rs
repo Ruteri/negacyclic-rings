@@ -301,6 +301,8 @@ pub fn pointwise_mac<const N: usize, const CHANNEL_COUNT: usize>(
     pointwise_mac_scalar(ring, acc, a, b, channel);
 }
 
+// Accumulates Montgomery-domain products, converting out of Montgomery form
+// once per coefficient at the end: mont(Σ mont(a·b) · r2) = Σ a·b.
 fn pointwise_mac_scalar<const N: usize, const CHANNEL_COUNT: usize>(
     ring: &Ring32<N>,
     acc: &mut [u32; N],
