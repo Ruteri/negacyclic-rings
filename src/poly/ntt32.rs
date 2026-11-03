@@ -119,6 +119,7 @@ pub fn add_mod(a: u32, b: u32, q: u32) -> u32 {
     csub(a + b, q)
 }
 
+/// `(a - b) mod q` for canonical `a, b` in `[0, q)`.
 #[inline(always)]
 pub fn sub_mod(a: u32, b: u32, q: u32) -> u32 {
     let difference = a.wrapping_sub(b);
