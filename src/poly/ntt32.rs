@@ -275,9 +275,10 @@ fn pointwise_dot_scalar<const N: usize>(
     out
 }
 
-/// `acc[i] += Σ_k a[k][channel][i]·b[k][channel][i] (mod q)` for canonical inputs. Takes
-/// the whole residue arrays and a channel index so the RNS layer needs no
-/// per-channel reference vectors.
+/// `acc[i] += Σ_k a[k][channel][i]·b[k][channel][i] (mod q)` for canonical
+/// NTT-domain inputs; apply `inv_ntt` to `acc` to get the sum of the
+/// negacyclic products. Takes the whole residue arrays and a channel index so
+/// the RNS layer needs no per-channel reference vectors.
 pub fn pointwise_mac<const N: usize, const CHANNEL_COUNT: usize>(
     ring: &Ring32<N>,
     acc: &mut [u32; N],
