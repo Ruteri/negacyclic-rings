@@ -485,7 +485,7 @@ mod avx2 {
             let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
-            // t = 1
+            // t = 1: twiddles per adjacent pair, operands are even/odd lanes.
             let (i0, i1) = (ma + 2 * g, ma + 2 * g + 1);
             let w = twiddle_pair(ring.inv_ntt_table[i0], ring.inv_ntt_table[i1]);
             let ws = twiddle_pair(ring.inv_ntt_table_shoup[i0], ring.inv_ntt_table_shoup[i1]);
@@ -495,7 +495,7 @@ mod avx2 {
             let new_v = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
             x = _mm256_unpacklo_epi64(new_u, new_v);
 
-            // t = 2
+            // t = 2: one twiddle; each 128-bit half copied across the register.
             let w = _mm256_set1_epi64x(ring.inv_ntt_table[mb + g] as i64);
             let ws = _mm256_set1_epi64x(ring.inv_ntt_table_shoup[mb + g] as i64);
             let u = _mm256_permute2x128_si256::<0x00>(x, x);

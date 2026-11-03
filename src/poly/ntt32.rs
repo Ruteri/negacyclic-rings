@@ -573,7 +573,7 @@ pub(in crate::poly) mod avx2 {
             let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
-            // t = 1
+            // t = 1: twiddles per adjacent pair, operands are even/odd lanes.
             let j = ma + 4 * g;
             let w = twiddle_quads(&ring.inv_ntt_table[j..j + 4]);
             let ws = twiddle_quads(&ring.inv_ntt_table_shoup[j..j + 4]);
@@ -583,7 +583,7 @@ pub(in crate::poly) mod avx2 {
             let new_v = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
             x = _mm256_blend_epi32::<0x55>(_mm256_slli_epi64::<32>(new_v), new_u);
 
-            // t = 2
+            // t = 2: twiddles per 4-group, operands split by 64-bit halves.
             let (i0, i1) = (mb + 2 * g, mb + 2 * g + 1);
             let w = twiddle_pairs(ring.inv_ntt_table[i0], ring.inv_ntt_table[i1]);
             let ws = twiddle_pairs(ring.inv_ntt_table_shoup[i0], ring.inv_ntt_table_shoup[i1]);
@@ -593,7 +593,7 @@ pub(in crate::poly) mod avx2 {
             let new_v = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
             x = _mm256_unpacklo_epi64(new_u, new_v);
 
-            // t = 4
+            // t = 4: one twiddle; each 128-bit half copied across the register.
             let w = _mm256_set1_epi32(ring.inv_ntt_table[mc + g] as i32);
             let ws = _mm256_set1_epi32(ring.inv_ntt_table_shoup[mc + g] as i32);
             let u = _mm256_permute2x128_si256::<0x00>(x, x);
