@@ -195,6 +195,8 @@ fn inv_ntt_final_scale_scalar<const N: usize>(ring: &Ring32<N>, coefficients: &m
     }
 }
 
+/// Pointwise product `lhs[i]·rhs[i] mod q` of two canonical NTT-domain
+/// polynomials; apply `inv_ntt` to the result to get their negacyclic product.
 #[inline]
 pub fn pointwise_mul<const N: usize>(ring: &Ring32<N>, lhs: &[u32; N], rhs: &[u32; N]) -> [u32; N] {
     #[cfg(target_arch = "x86_64")]
