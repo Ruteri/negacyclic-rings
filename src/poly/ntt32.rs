@@ -633,12 +633,14 @@ pub(in crate::poly) mod avx2 {
     #[target_feature(enable = "avx2")]
     unsafe fn mont_mul_v(a: __m256i, b: __m256i, q64_v: __m256i, qinv_v: __m256i) -> __m256i {
         let mask = lo_mask();
+        // Even lanes: the low 32 bits of each u64.
         let even = mont_mul_half(
             _mm256_and_si256(a, mask),
             _mm256_and_si256(b, mask),
             q64_v,
             qinv_v,
         );
+        // Odd lanes: shifted down from the high 32 bits, shifted back up when combined.
         let odd = mont_mul_half(
             _mm256_srli_epi64(a, 32),
             _mm256_srli_epi64(b, 32),
