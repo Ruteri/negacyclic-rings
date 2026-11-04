@@ -802,6 +802,8 @@ pub(in crate::poly) mod avx2 {
         let q1inv = _mm256_set1_epi64x(ring.channels[1].q_inv_neg as i64);
         let prefix = _mm256_set1_epi32(ring.prefix_inverses[1] as i32);
         let r2 = _mm256_set1_epi32(ring.channels[1].r2 as i32);
+        // r0 < q0 < 2·q1, so r0 mod q1 is one conditional subtraction; otherwise
+        // the loop below computes it with a scalar `%` per coefficient.
         if q0 < 2 * q1 as u64 {
             let q1_32 = _mm256_set1_epi32(q1 as i32);
             let q0_64 = _mm256_set1_epi64x(q0 as i64);
