@@ -691,6 +691,7 @@ pub(in crate::poly) mod avx2 {
         let r2_v = _mm256_set1_epi32(ring.r2 as i32);
         for chunk in 0..(N / LANES) {
             let offset = chunk * LANES;
+            // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-32 mod q.
             let mut mont_acc = _mm256_setzero_si256();
             for k in 0..a.len() {
                 let av = _mm256_loadu_si256(a[k].as_ptr().add(offset) as *const __m256i);
@@ -698,6 +699,7 @@ pub(in crate::poly) mod avx2 {
                 let prod = mont_mul_v(av, bv, q64_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
+            // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
             let sum = mont_mul_v(mont_acc, r2_v, q64_v, qinv_v);
             _mm256_storeu_si256(out.as_mut_ptr().add(offset) as *mut __m256i, sum);
         }
@@ -718,6 +720,7 @@ pub(in crate::poly) mod avx2 {
         for chunk in 0..(N / LANES) {
             let offset = chunk * LANES;
             let acc_ptr = acc.as_mut_ptr().add(offset) as *mut __m256i;
+            // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-32 mod q.
             let mut mont_acc = _mm256_setzero_si256();
             for k in 0..a.len() {
                 let av = _mm256_loadu_si256(a[k][channel].as_ptr().add(offset) as *const __m256i);
@@ -725,6 +728,7 @@ pub(in crate::poly) mod avx2 {
                 let prod = mont_mul_v(av, bv, q64_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
+            // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
             let sum = mont_mul_v(mont_acc, r2_v, q64_v, qinv_v);
             let acc_v = _mm256_loadu_si256(acc_ptr as *const __m256i);
             _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, sum, q_v));
