@@ -633,19 +633,19 @@ pub(in crate::poly) mod avx2 {
     #[target_feature(enable = "avx2")]
     unsafe fn mont_mul_v(a: __m256i, b: __m256i, q64_v: __m256i, qinv_v: __m256i) -> __m256i {
         let mask = lo_mask();
-        let re = mont_mul_half(
+        let even = mont_mul_half(
             _mm256_and_si256(a, mask),
             _mm256_and_si256(b, mask),
             q64_v,
             qinv_v,
         );
-        let ro = mont_mul_half(
+        let odd = mont_mul_half(
             _mm256_srli_epi64(a, 32),
             _mm256_srli_epi64(b, 32),
             q64_v,
             qinv_v,
         );
-        _mm256_or_si256(re, _mm256_slli_epi64(ro, 32))
+        _mm256_or_si256(even, _mm256_slli_epi64(odd, 32))
     }
 
     /// Montgomery product on one u64 half: inputs are u32 values in the low
