@@ -650,8 +650,9 @@ pub(in crate::poly) mod avx2 {
         _mm256_or_si256(even, _mm256_slli_epi64(odd, 32))
     }
 
-    /// Montgomery product on one u64 half: inputs are u32 values in the low
-    /// 32 bits of each u64 lane, output likewise, canonical in `[0, q)`.
+    /// Montgomery product `a·b·2^-32 mod q` on 4 u64 lanes (one half of
+    /// `mont_mul_v`): inputs in the low 32 bits of each lane, output likewise,
+    /// canonical in `[0, q)` with the high 32 bits zero.
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn mont_mul_half(a: __m256i, b: __m256i, q64_v: __m256i, qinv_v: __m256i) -> __m256i {
