@@ -764,6 +764,8 @@ pub(in crate::poly) mod avx2 {
         let magnitude = _mm256_sub_epi64(_mm256_xor_si256(value, sign), sign);
         let low = _mm256_and_si256(magnitude, mask);
         let high = _mm256_srli_epi64::<32>(magnitude);
+        // |value| = high·2^32 + low ≡ low + high·(2^32 mod q) (mod q), and the sum is
+        // below q·2^32, so mont_reduce_half accepts it; the r2 product undoes its 2^-32.
         let combined = _mm256_add_epi64(low, _mm256_mul_epu32(high, radix));
         let montgomery = mont_reduce_half(combined, q, q_inv);
         let residue = mont_mul_half(montgomery, r2, q, q_inv);
