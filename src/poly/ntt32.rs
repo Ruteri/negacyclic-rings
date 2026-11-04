@@ -823,6 +823,7 @@ pub(in crate::poly) mod avx2 {
                         q1_32,
                     ),
                 );
+                // delta·prefix mod q1, as in the scalar mul_mod: the r2 product cancels the 2^-32.
                 let digit = mont_mul_v(mont_mul_v(delta, prefix, q1v, q1inv), r2, q1v, q1inv);
                 let even = _mm256_add_epi64(
                     _mm256_and_si256(r0, lo_mask()),
