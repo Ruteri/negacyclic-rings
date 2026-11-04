@@ -660,6 +660,7 @@ pub(in crate::poly) mod avx2 {
         mont_reduce_half(x, q64_v, qinv_v)
     }
 
+    // Montgomery reduction per u64 lane: `x < q·2^32` → `x·2^-32 mod q` in `[0, q)`.
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn mont_reduce_half(x: __m256i, q64_v: __m256i, qinv_v: __m256i) -> __m256i {
