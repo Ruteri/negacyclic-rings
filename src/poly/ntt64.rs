@@ -208,7 +208,7 @@ pub fn mont_mul<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
     mont_reduce(a as u128 * b as u128, ring)
 }
 
-/// Montgomery reduction: `x < q·2^64` → `x·2^-64 mod q`, canonical.
+/// Montgomery reduction: `x < q·2^64` → `x·2^-64 mod q`, canonical in `[0, q)`.
 #[inline(always)]
 pub fn mont_reduce<const N: usize>(x: u128, ring: &Ring64<N>) -> u64 {
     let m = (x as u64).wrapping_mul(ring.q_inv_neg);

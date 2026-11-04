@@ -229,7 +229,7 @@ pub fn mont_mul<const N: usize>(a: u32, b: u32, ring: &Ring32<N>) -> u32 {
     mont_reduce(a as u64 * b as u64, ring)
 }
 
-/// Montgomery reduction: `x < q·2^32` → `x·2^-32 mod q`, canonical.
+/// Montgomery reduction: `x < q·2^32` → `x·2^-32 mod q`, canonical in `[0, q)`.
 #[inline(always)]
 pub fn mont_reduce<const N: usize>(x: u64, ring: &Ring32<N>) -> u32 {
     let m = (x as u32).wrapping_mul(ring.q_inv_neg);
@@ -660,7 +660,7 @@ pub(in crate::poly) mod avx2 {
         mont_reduce_half(x, q64_v, qinv_v)
     }
 
-    // Montgomery reduction per u64 lane: `x < q·2^32` → `x·2^-32 mod q` in `[0, q)`.
+    // Montgomery reduction per u64 lane: `x < q·2^32` → `x·2^-32 mod q`, canonical in `[0, q)`.
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn mont_reduce_half(x: __m256i, q64_v: __m256i, qinv_v: __m256i) -> __m256i {
