@@ -698,8 +698,8 @@ pub(in crate::poly) mod avx2 {
                 let prod = mont_mul_v(av, bv, q64_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
-            let canon = mont_mul_v(mont_acc, r2_v, q64_v, qinv_v);
-            _mm256_storeu_si256(out.as_mut_ptr().add(offset) as *mut __m256i, canon);
+            let sum = mont_mul_v(mont_acc, r2_v, q64_v, qinv_v);
+            _mm256_storeu_si256(out.as_mut_ptr().add(offset) as *mut __m256i, sum);
         }
     }
 
@@ -725,9 +725,9 @@ pub(in crate::poly) mod avx2 {
                 let prod = mont_mul_v(av, bv, q64_v, qinv_v);
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
-            let canon = mont_mul_v(mont_acc, r2_v, q64_v, qinv_v);
+            let sum = mont_mul_v(mont_acc, r2_v, q64_v, qinv_v);
             let acc_v = _mm256_loadu_si256(acc_ptr as *const __m256i);
-            _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, canon, q_v));
+            _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, sum, q_v));
         }
     }
 
@@ -1253,11 +1253,11 @@ pub(in crate::poly) mod neon {
                 let prod = mont_mul_v(av, bv, ring.q, ring.q_inv_neg);
                 mont_acc = add_mod_v(mont_acc, vreinterpretq_s32_u32(prod), q_v);
             }
-            let canon = mont_mul_v(vreinterpretq_u32_s32(mont_acc), r2, ring.q, ring.q_inv_neg);
+            let sum = mont_mul_v(vreinterpretq_u32_s32(mont_acc), r2, ring.q, ring.q_inv_neg);
             let acc_v = vreinterpretq_s32_u32(vld1q_u32(acc.as_ptr().add(offset)));
             vst1q_u32(
                 acc.as_mut_ptr().add(offset),
-                vreinterpretq_u32_s32(add_mod_v(acc_v, vreinterpretq_s32_u32(canon), q_v)),
+                vreinterpretq_u32_s32(add_mod_v(acc_v, vreinterpretq_s32_u32(sum), q_v)),
             );
         }
         for i in vector_end..N {

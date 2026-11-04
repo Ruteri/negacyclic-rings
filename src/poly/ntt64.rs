@@ -530,9 +530,9 @@ mod avx2 {
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
             // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
-            let canon = mont_mul_v(mont_acc, r2_v, q_v, qinv_v);
+            let sum = mont_mul_v(mont_acc, r2_v, q_v, qinv_v);
             let acc_v = _mm256_loadu_si256(acc_ptr as *const __m256i);
-            _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, canon, q_v));
+            _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, sum, q_v));
         }
     }
 
