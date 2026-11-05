@@ -1384,6 +1384,7 @@ pub(in crate::poly) mod neon {
                 let reduced_r0 = vsubq_u32(r0, vandq_u32(vcgeq_u32(r0, q1v), q1v));
                 let difference = vsubq_u32(r1, reduced_r0);
                 let delta = vaddq_u32(difference, vandq_u32(vcltq_u32(r1, reduced_r0), q1v));
+                // delta·prefix mod q1, as in the scalar mul_mod: the r2 product cancels the 2^-32.
                 let digit = mont_mul_v(
                     mont_mul_v(delta, prefix, q1, ring.channels[1].q_inv_neg),
                     r2,
