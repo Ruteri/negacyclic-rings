@@ -1102,6 +1102,8 @@ pub(in crate::poly) mod neon {
                 while j < j1 + t {
                     let u = vreinterpretq_s32_u32(vld1q_u32(coefficients.as_ptr().add(j)));
                     let v = vreinterpretq_s32_u32(vld1q_u32(coefficients.as_ptr().add(j + t)));
+                    // Lazy: u, v < 2q, so u + v < 4q and u − v > −2q; one correction by 2q
+                    // puts both in [0, 2q).
                     let (sum, diff) = if LAZY {
                         (
                             sub_if_ge(vaddq_s32(u, v), two_q_v),
