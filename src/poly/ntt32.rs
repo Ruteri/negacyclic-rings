@@ -903,6 +903,8 @@ pub(in crate::poly) mod neon {
                     let u = vreinterpretq_s32_u32(vld1q_u32(coefficients.as_ptr().add(j)));
                     let v = vreinterpretq_s32_u32(vld1q_u32(coefficients.as_ptr().add(j + ht)));
                     let v = becker_mul_v(v, w, scaled, q_v);
+                    // Lazy: u < 2q and v < q (becker_mul_v is canonical), so u + v < 3q
+                    // and u − v > −q; one correction by 2q puts both in [0, 2q).
                     let (sum, diff) = if LAZY {
                         (
                             sub_if_ge(vaddq_s32(u, v), two_q_v),
