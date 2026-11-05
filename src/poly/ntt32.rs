@@ -1247,6 +1247,7 @@ pub(in crate::poly) mod neon {
         let r2 = vdupq_n_u32(ring.r2);
         let vector_end = N / LANES * LANES;
         for offset in (0..vector_end).step_by(LANES) {
+            // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-32 mod q.
             let mut mont_acc = vdupq_n_s32(0);
             for k in 0..a.len() {
                 let av = vld1q_u32(a[k].as_ptr().add(offset));
@@ -1254,6 +1255,7 @@ pub(in crate::poly) mod neon {
                 let prod = mont_mul_v(av, bv, ring.q, ring.q_inv_neg);
                 mont_acc = add_mod_v(mont_acc, vreinterpretq_s32_u32(prod), q_v);
             }
+            // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
             vst1q_u32(
                 out.as_mut_ptr().add(offset),
                 mont_mul_v(vreinterpretq_u32_s32(mont_acc), r2, ring.q, ring.q_inv_neg),
@@ -1279,6 +1281,7 @@ pub(in crate::poly) mod neon {
         let r2 = vdupq_n_u32(ring.r2);
         let vector_end = N / LANES * LANES;
         for offset in (0..vector_end).step_by(LANES) {
+            // Montgomery-domain accumulator: Σ_k a_k·b_k·2^-32 mod q.
             let mut mont_acc = vdupq_n_s32(0);
             for k in 0..a.len() {
                 let av = vld1q_u32(a[k][channel].as_ptr().add(offset));
@@ -1286,6 +1289,7 @@ pub(in crate::poly) mod neon {
                 let prod = mont_mul_v(av, bv, ring.q, ring.q_inv_neg);
                 mont_acc = add_mod_v(mont_acc, vreinterpretq_s32_u32(prod), q_v);
             }
+            // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
             let sum = mont_mul_v(vreinterpretq_u32_s32(mont_acc), r2, ring.q, ring.q_inv_neg);
             let acc_v = vreinterpretq_s32_u32(vld1q_u32(acc.as_ptr().add(offset)));
             vst1q_u32(
