@@ -1148,6 +1148,7 @@ pub(in crate::poly) mod neon {
             let ptr = coefficients.as_mut_ptr().add(g * LANES);
             let mut x = vreinterpretq_s32_u32(vld1q_u32(ptr));
 
+            // t = 1: twiddles per adjacent pair, operands are even/odd lanes.
             let i = m1 + 2 * g;
             let (w, scaled) = twiddle_pairs(
                 ring.inv_ntt_table[i],
@@ -1163,6 +1164,7 @@ pub(in crate::poly) mod neon {
                 becker_mul_v(sub_mod_v(u, v, q_v), w, scaled, q_v),
             );
 
+            // t = 2: one twiddle; each 64-bit half copied across the register.
             let (w, scaled) = twiddle_v(
                 ring.inv_ntt_table[m2 + g],
                 ring.inv_ntt_table_shoup[m2 + g],
