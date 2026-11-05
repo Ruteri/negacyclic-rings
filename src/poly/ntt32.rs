@@ -942,6 +942,8 @@ pub(in crate::poly) mod neon {
         (vdupq_n_s32(w), vdupq_n_s32(scaled))
     }
 
+    // Becker et al. Algorithm 10's companion round(w·2^31/q), derived from the Shoup
+    // table. Twiddles above q/2 become w − q, so the companion fits a signed 32-bit lane.
     #[inline(always)]
     fn centered_twiddle(w: u32, w_shoup: u32, q: u32) -> (i32, i32) {
         let mut centered = w as i64;
