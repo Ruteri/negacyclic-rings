@@ -975,6 +975,7 @@ pub(in crate::poly) mod neon {
         canonicalize(product, q_v)
     }
 
+    // [−q, 2q) → [0, q): at most one correction by q in each direction.
     #[inline(always)]
     unsafe fn canonicalize(v: int32x4_t, q_v: int32x4_t) -> int32x4_t {
         let zero = vdupq_n_s32(0);
