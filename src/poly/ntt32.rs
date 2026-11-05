@@ -1071,6 +1071,8 @@ pub(in crate::poly) mod neon {
         ring: &Ring32<N>,
         coefficients: &mut [u32; N],
     ) {
+        // Lazy butterflies keep coefficients in [0, 2q) between stages, so sums stay
+        // below 4q; that must fit a signed 32-bit lane. Otherwise reduce fully each stage.
         if (ring.q as u64) * 4 < (1u64 << 31) {
             inv_ntt_neon_inner::<N, true>(ring, coefficients);
         } else {
