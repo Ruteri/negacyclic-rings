@@ -1230,8 +1230,7 @@ pub(in crate::poly) mod neon {
         mont_reduce_half(x, q_v, q_inv_v)
     }
 
-    // Montgomery reduction per u64 lane: `x < q·2^32` → `x·2^-32 mod q` in [0, 2q),
-    // with no final correction (callers do it).
+    // Montgomery reduction per u64 lane: `x < q·2^32` → `x·2^-32 mod q` in [0, 2q).
     #[inline(always)]
     unsafe fn mont_reduce_half(x: uint64x2_t, q_v: uint32x2_t, q_inv_v: uint32x2_t) -> uint32x2_t {
         let m = vmul_u32(vmovn_u64(x), q_inv_v);
