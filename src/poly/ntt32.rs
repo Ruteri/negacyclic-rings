@@ -1125,6 +1125,7 @@ pub(in crate::poly) mod neon {
             t = dt;
             m = hm;
         }
+        // Scaling by N^-1 also brings lazy coefficients back to [0, q): becker_mul_v is canonical.
         let (n_inv, scaled) = twiddle_v(ring.n_inv, ring.n_inv_shoup, ring.q);
         for offset in (0..N).step_by(LANES) {
             let ptr = coefficients.as_mut_ptr().add(offset);
