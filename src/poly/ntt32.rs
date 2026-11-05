@@ -964,6 +964,7 @@ pub(in crate::poly) mod neon {
     ) -> int32x4_t {
         let quotient = vqrdmulhq_s32(a, scaled_v);
         let mut product = vmulq_s32(a, w_v);
+        // Inline asm, not vmlsq_s32, so the compiler keeps a single mls after sqrdmulh.
         asm!(
             "mls {product:v}.4s, {quotient:v}.4s, {q:v}.4s",
             product = inout(vreg) product,
