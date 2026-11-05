@@ -923,6 +923,7 @@ pub(in crate::poly) mod neon {
             t = ht;
         }
         debug_assert_eq!(t, LANES);
+        // Lazy stages leave coefficients in [0, 2q); the tail needs them in [0, q).
         if LAZY {
             for offset in (0..N).step_by(LANES) {
                 let ptr = coefficients.as_mut_ptr().add(offset);
