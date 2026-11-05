@@ -1374,6 +1374,8 @@ pub(in crate::poly) mod neon {
         let product = q0 * q1 as u64;
         let prefix = vdupq_n_u32(ring.prefix_inverses[1]);
         let r2 = vdupq_n_u32(ring.channels[1].r2);
+        // r0 < q0 < 2·q1, so r0 mod q1 is one conditional subtraction; otherwise
+        // the loop below computes it with a scalar `%` per coefficient.
         if q0 < 2 * q1 as u64 {
             let q1v = vdupq_n_u32(q1);
             for offset in (0..N).step_by(LANES) {
