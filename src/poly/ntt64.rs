@@ -208,7 +208,7 @@ pub fn mont_mul<const N: usize>(a: u64, b: u64, ring: &Ring64<N>) -> u64 {
     mont_reduce(a as u128 * b as u128, ring)
 }
 
-/// Montgomery reduction: `x < q·2^64` → `x·2^-64 mod q`, canonical.
+/// Montgomery reduction: `x < q·2^64` → `x·2^-64 mod q`, canonical in `[0, q)`.
 #[inline(always)]
 pub fn mont_reduce<const N: usize>(x: u128, ring: &Ring64<N>) -> u64 {
     let m = (x as u64).wrapping_mul(ring.q_inv_neg);
@@ -316,7 +316,7 @@ mod avx2 {
         ntt_tail(ring, coefficients, q_v);
     }
 
-    /// Shoup multiply by a broadcast constant: `a·w mod q`, canonical output.
+    /// Shoup multiply by a precomputed constant in each lane: `a·w mod q`, canonical output.
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn shoup_mul_v(a: __m256i, w_v: __m256i, ws_v: __m256i, q_v: __m256i) -> __m256i {
@@ -400,7 +400,7 @@ mod avx2 {
             let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
-            // ht = 2: one twiddle, halves swapped across the 128-bit lanes.
+            // ht = 2: one twiddle; each 128-bit half copied across the register.
             let w = _mm256_set1_epi64x(ring.ntt_table[ma + g] as i64);
             let ws = _mm256_set1_epi64x(ring.ntt_table_shoup[ma + g] as i64);
             let u = _mm256_permute2x128_si256::<0x00>(x, x);
@@ -485,7 +485,7 @@ mod avx2 {
             let ptr = coefficients.as_mut_ptr().add(g * LANES) as *mut __m256i;
             let mut x = _mm256_loadu_si256(ptr as *const __m256i);
 
-            // t = 1
+            // t = 1: twiddles per adjacent pair, operands are even/odd lanes.
             let (i0, i1) = (ma + 2 * g, ma + 2 * g + 1);
             let w = twiddle_pair(ring.inv_ntt_table[i0], ring.inv_ntt_table[i1]);
             let ws = twiddle_pair(ring.inv_ntt_table_shoup[i0], ring.inv_ntt_table_shoup[i1]);
@@ -495,7 +495,7 @@ mod avx2 {
             let new_v = shoup_mul_v(sub_mod_v(u, v, q_v), w, ws, q_v);
             x = _mm256_unpacklo_epi64(new_u, new_v);
 
-            // t = 2
+            // t = 2: one twiddle; each 128-bit half copied across the register.
             let w = _mm256_set1_epi64x(ring.inv_ntt_table[mb + g] as i64);
             let ws = _mm256_set1_epi64x(ring.inv_ntt_table_shoup[mb + g] as i64);
             let u = _mm256_permute2x128_si256::<0x00>(x, x);
@@ -530,9 +530,9 @@ mod avx2 {
                 mont_acc = add_mod_v(mont_acc, prod, q_v);
             }
             // One conversion out of Montgomery form per chunk: mont(Σ · r2) = Σ.
-            let canon = mont_mul_v(mont_acc, r2_v, q_v, qinv_v);
+            let sum = mont_mul_v(mont_acc, r2_v, q_v, qinv_v);
             let acc_v = _mm256_loadu_si256(acc_ptr as *const __m256i);
-            _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, canon, q_v));
+            _mm256_storeu_si256(acc_ptr, add_mod_v(acc_v, sum, q_v));
         }
     }
 
