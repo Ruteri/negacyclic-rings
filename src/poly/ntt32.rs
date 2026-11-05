@@ -1180,6 +1180,8 @@ pub(in crate::poly) mod neon {
         }
     }
 
+    // lhs[i]·rhs[i] mod q via two Montgomery rounds, the second against r2 to leave
+    // the Montgomery domain.
     pub(super) unsafe fn pointwise_mul_neon<const N: usize>(
         ring: &Ring32<N>,
         out: &mut [u32; N],
