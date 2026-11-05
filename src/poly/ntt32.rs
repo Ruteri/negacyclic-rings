@@ -1208,9 +1208,9 @@ pub(in crate::poly) mod neon {
     unsafe fn mont_mul_v(a: uint32x4_t, b: uint32x4_t, q: u32, q_inv: u32) -> uint32x4_t {
         let q2 = vdup_n_u32(q);
         let qi2 = vdup_n_u32(q_inv);
-        let lo = mont_mul_half(vget_low_u32(a), vget_low_u32(b), q2, qi2);
-        let hi = mont_mul_half(vget_high_u32(a), vget_high_u32(b), q2, qi2);
-        let v = vcombine_u32(lo, hi);
+        let low = mont_mul_half(vget_low_u32(a), vget_low_u32(b), q2, qi2);
+        let high = mont_mul_half(vget_high_u32(a), vget_high_u32(b), q2, qi2);
+        let v = vcombine_u32(low, high);
         vreinterpretq_u32_s32(canonicalize(
             vreinterpretq_s32_u32(v),
             vdupq_n_s32(q as i32),
