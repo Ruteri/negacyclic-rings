@@ -1050,6 +1050,8 @@ pub(in crate::poly) mod neon {
         }
     }
 
+    // [w0, w1, w0, w1] and their companions: after the tail's even/odd split, pair k is
+    // in lane k; lanes 2 and 3 repeat 0 and 1 and are discarded.
     #[inline(always)]
     unsafe fn twiddle_pairs(
         w0: u32,
