@@ -1331,6 +1331,8 @@ pub(in crate::poly) mod neon {
         let magnitude = vreinterpretq_u64_s64(vabsq_s64(value));
         let low = vmovn_u64(magnitude);
         let high = vmovn_u64(vshrq_n_u64::<32>(magnitude));
+        // |value| = high·2^32 + low ≡ low + high·(2^32 mod q) (mod q), and the sum is
+        // below q·2^32, so mont_reduce_half accepts it; the r2 product undoes its 2^-32.
         let combined = vaddq_u64(vmovl_u32(low), vmull_u32(high, radix));
         let montgomery = mont_reduce_half(combined, q, q_inv);
         let residue = mont_mul_half(montgomery, r2, q, q_inv);
