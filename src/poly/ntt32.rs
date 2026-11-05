@@ -1217,8 +1217,7 @@ pub(in crate::poly) mod neon {
         ))
     }
 
-    // a·b·2^-32 mod q on one 2-lane half of mont_mul_v, in [0, 2q): unlike AVX2, the
-    // final correction happens in mont_mul_v, after the halves are combined.
+    // a·b·2^-32 mod q on one 2-lane half of mont_mul_v, in [0, 2q).
     #[inline(always)]
     unsafe fn mont_mul_half(
         a: uint32x2_t,
